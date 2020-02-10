@@ -88,8 +88,38 @@ for index,row in enumerate(stdData):
     del element
     # 对于特殊情况，进行极值抑制
     # 只要能够找得到线性插值，就采用线性插值
+    # 具体做法：不正常点（在最前或最后），直接采用最大值抑制
+    # 使用一个数组进行一轮操作，将中间删除部分标出。
+    # 对于被删掉的部分，寻找距离其最近的，两端进行线性插值。
+    # previous为第一个异常点
+    previous = -1
+    for i,ele in enumerate(stdData[index]):
+        if abs(ele) > maxNum:#这个点是异常点
+            if previous == -1:
+                previous = i
+        else:
+            if previous != -1:
+                #开始进行从previous到i-1部分的线性插值
+                if previous == 0:# 如果previous是第一个，对全体进行最大值抑制
+                    for vi in range(i):
+                        if stdData[index][vi] < 0:
+                            stdData[index][vi] = -1*maxNum
+                        else:
+                            stdData[index][vi] = maxNum
+                else:#不是，正常进行最大值抑制
+                    dataRange = stdData[index][i] - stdData[index][previous-1]
+                    number = i - (previous-1)
+                    for vi in range(previous,i):
+                        stdData[index][vi] = stdData[index][previous-1] + dataRange/number*(vi-previous+1) 
+                previous = -1
     
-
+    #可能出现最后一个是异常点的情况，进行抑制
+    if previous != -1:
+        for vi in range(previous,len(stdData[index])):
+            if stdData[index][vi] < 0:
+                stdData[index][vi] = -1*maxNum
+            else:
+                stdData[index][vi] = maxNum
 
 #再进行一次归一化
 from tslearn.preprocessing import TimeSeriesScalerMinMax
