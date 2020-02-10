@@ -83,6 +83,7 @@ stdData = scaler.fit_transform(formatted_dataset)
 # 对于每一行的数据，得到一个绝对值排序结果，将最大的前5%排除出去。然后对空缺的位置进行线性差值
 for index,row in enumerate(stdData):
     element = abs(row)
+    element = element.ravel()
     element.sort()
     maxNum = element[-1*int(ratio*len(element))]
     del element
