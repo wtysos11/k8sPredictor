@@ -122,14 +122,20 @@ for index,row in enumerate(stdData):
             else:
                 stdData[index][vi] = maxNum
 
+
+# 2.对去除后的数据进行归一化处理
 #再进行一次归一化
 from tslearn.preprocessing import TimeSeriesScalerMinMax
 scaler = TimeSeriesScalerMeanVariance(mu=0., std=1.)
 stdData = scaler.fit_transform(stdData)
 
-# 2.对去除后的数据进行归一化处理
-
 # 3.然后进行PAA处理，得到基线和残余值
+from tslearn.piecewise import PiecewiseAggregateApproximation
+n_paa_segments = 20
+paa = PiecewiseAggregateApproximation(n_segments=n_paa_segments)
+paa_mid = paa.fit_transform(stdData)
+paa_inv = paa.inverse_transform(paa_mid)
+
 
 # 4.对PAA后的数据进行简单k-means，聚类数量不超过10，分数按照CH分数判断，选出最大的
 
