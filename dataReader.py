@@ -228,22 +228,22 @@ from tslearn.piecewise import SymbolicAggregateApproximation, OneD_SymbolicAggre
 import time
 # 1dSAX
 n_paa_segments = 40
-n_sax_symbols_avg = 10
-n_sax_symbols_slope = 10
+n_sax_symbols_avg = 30
+n_sax_symbols_slope = 30
 one_d_sax = OneD_SymbolicAggregateApproximation(
     n_segments=n_paa_segments,
     alphabet_size_avg=n_sax_symbols_avg,
     alphabet_size_slope=n_sax_symbols_slope)
-transformed_data = one_d_sax.fit_transform(stdData)
-# transformed_data是一个 N\*40*2的矩阵，可以reshape成N*80的矩阵
-transformed_data = transformed_data.reshape(transformed_data.shape[0],transformed_data.shape[1]*transformed_data.shape[2])
+transformed_data = one_d_sax.inverse_transform(one_d_sax.fit_transform(stdData))
+
 
 from sklearn.cluster import MiniBatchKMeans,KMeans,DBSCAN,SpectralClustering,Birch
-from sklearn.metrics import calinski_harabasz_score
-
-#Kmeans 结果
+from sklearn.metrics import calinski_harabasz_score,davies_bouldin_score
 
 n_cluster = 100
+
+#Kmeans 结果
+# 超参数：k的取值
 s = time.time()
 km = KMeans(n_clusters = n_cluster,random_state = 0)
 y_pre = km.fit_predict(transformed_data)
@@ -252,7 +252,7 @@ print(e-s,"s")
 print(davies_bouldin_score(transformed_data,y_pre))
 
 # MiniBatch k means
-n_cluster = 100
+# 超参数：k的取值，batch_size的大小。其中batch_size的大小影响速度
 s = time.time()
 km = MiniBatchKMeans(n_clusters = n_cluster,init_size = 3*n_cluster,random_state = 0,batch_size = 10)
 y_pre = km.fit_predict(transformed_data)
@@ -260,6 +260,79 @@ e = time.time()
 print(e-s,"s")
 print(davies_bouldin_score(transformed_data,y_pre))
 
-#
+# Birch
+# 超参数：threshold阈值，branching_factor
+s = time.time()
+y_pre = Birch(n_clusters=None).fit_predict(transformed_data)
+e = time.time()
+print(e-s,"s")
+print(davies_bouldin_score(transformed_data,y_pre))
+
 
 # DBSCAN
+# 超参数：eps,min_samples
+s = time.time()
+y_pre = DBSCAN(eps = 0.5,min_samples=5).fit_predict(transformed_data)
+e = time.time()
+print(e-s,"s")
+print(davies_bouldin_score(transformed_data,y_pre))
+
+# 谱聚类
+# 超参数：加入n_cluster，gamma
+s = time.time()
+y_pre = SpectralClustering().fit_predict(transformed_data)
+e = time.time()
+print(e-s,"s")
+print(davies_bouldin_score(transformed_data,y_pre))
+
+# 猜想6：新型归类方法
+# 多次聚类方法
+# 1. 先进行PAA+平均值归一化(SAX)
+# 2. 第一层聚类，再次抽象成三值数组，进行快速聚类
+# 3. 第二层聚类，对于同一类内再次进行聚类（可以使用kmeans）
+import matplotlib.pyplot as plt
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance
+from tslearn.piecewise import PiecewiseAggregateApproximation,SymbolicAggregateApproximation
+from tslearn.utils import to_time_series_dataset
+import time
+import numpy as np
+# 对于给定的原始数据(n*m*特征值数量型)，返回平均值归一化后的结果（不在原数据上进行变动）
+def getStdData(originData):
+    n_paa_segments = 120 #一天分成4份，每6个小时整合为一段
+    paa_data = PiecewiseAggregateApproximation(n_segments = n_paa_segments).fit_transform(originData)
+    #进行平均值归一化
+    scaler = TimeSeriesScalerMeanVariance(mu=0., std=1.)
+    dataset = scaler.fit_transform(paa_data)
+    dataset = dataset.reshape(dataset.shape[0],dataset.shape[1])
+    return dataset
+
+#将归一化后的数据变成0、1、-1的数据集合。
+#每个元素的意义为下一个元素是否会增加或减少
+def get01Data(originData):
+    ratio = 0.1
+    data = originData.copy()
+    for index,ele in enumerate(data):
+        #对每个元素，确定其最大最小的范围。
+        dataRange = max(ele) - min(ele)
+        dataDiff = np.diff(ele)
+        for i,num in enumerate(dataDiff):
+            if num > dataRange*ratio:
+                data[index][i] = 1
+            elif num < dataRange*-1*ratio:
+                data[index][i] = -1
+            else:
+                data[index][i] = 0
+        data[index][len(ele)-1]=0
+    return data
+
+#原始数据为originData，直接从文件中得到的
+
+fileData = ReadDataFromFile()
+originData = to_time_series_dataset(list(data.values()))
+stdData = getStdData(originData)
+norData = get01Data(stdData)
+
+# 第一层聚类，要求：速度较快，容错较高
+
+# 尝试一
+
