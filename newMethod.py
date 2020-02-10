@@ -69,59 +69,29 @@ import numpy as np
 # 1.原始数据异常点去除实现：对原始数据进行排序。去除范围为前1%与后1%，合计2%左右
 # 如果旁边没有点，则直接删除，然后对原有数据空缺部分进行线性插值。否则进行最大最小抑制
 
-import numpy as np
-ratio = 0.01#抑制前1%与后1%的值
-stdData = formatted_dataset.copy()
-for i in range(len(stdData)):
-    ele = stdData[i].copy()
-    ele = ele.reshape(ele.shape[0])
-    ele.sort()#进行排序
-    minNum,maxNum = ele[int(ratio*len(ele))],ele[-1*int(ratio*len(ele))]
-    del ele #删除排序后的缓存
-    # 进行异常点去除。
-    # 如果这个点是一个孤立点，那么直接删除去线性。
-    # 如果这个点不是孤立点，那么进行最大最小抑制
-    variant = False #前一个点存在异常
-    for index,ele in enumerate(stdData[i]):
-        if ele > maxNum:
-            if index+1 == len(stdData[i]): #是最后一个
-                if variant and stdData[i][index-1] == maxNum:#上一个点是异常点，延续
-                    stdData[i][index] = maxNum
-                else:
-                    stdData[i][index] = stdData[i][index-1]
-            elif index == 0:#是第一个
-                if stdData[i][index+1] < maxNum:# 下一个不是异常点，删除
-                    stdData[i][index] = stdData[i][index+1]
-                else:
-                    stdData[i][index] = maxNum
-            else:#不是最后一个也不是第一个
-                if stdData[i][index-1]<maxNum and stdData[i][index+1]<maxNum: #孤立点，直接删除
-                    stdData[i][index] = (stdData[i][index-1] + stdData[i][index+1])/2
-                else:
-                    stdData[i][index] = maxNum
-        elif ele < minNum:
-            if index+1 == len(stdData[i]): #是最后一个
-                if variant and stdData[i][index-1] == minNum:
-                    stdData[i][index] = minNum
-                else:
-                    stdData[i][index] = stdData[i][index-1]
-            elif index == 0:#是第一个
-                if stdData[i][index+1] > minNum:#下一个点不是异常点，删除
-                    stdData[i][index] = stdData[i][index+1]
-                else:
-                    stdData[i][index] = minNum
-            else:#不是最后一个也不是第一个
-                if stdData[i][index-1]>minNum and stdData[i][index+1]>minNum: #孤立点，直接删除
-                    stdData[i][index] = (stdData[i][index-1] + stdData[i][index+1])/2
-                else:
-                    stdData[i][index] = minNum
-            variant = True
-        else:# 不是异常点，进行标记
-            variant = False
+# 时间序列：异常点排除一为方法1
+# 时间序列：异常点排除方法2：对原数据进行归一化。将所有数据减去平均值的绝对值后排序，去除5%，并进行线性插值
 
-    
+import numpy as np
+ratio = 0.05 #异常点数量
 
 #归一化
+from tslearn.preprocessing import TimeSeriesScalerMinMax
+scaler = TimeSeriesScalerMeanVariance(mu=0., std=1.)
+stdData = scaler.fit_transform(formatted_dataset)
+
+# 对于每一行的数据，得到一个绝对值排序结果，将最大的前5%排除出去。然后对空缺的位置进行线性差值
+for index,row in enumerate(stdData):
+    element = abs(row)
+    element.sort()
+    maxNum = element[-1*int(ratio*len(element))]
+    del element
+    # 对于特殊情况，进行极值抑制
+    # 只要能够找得到线性插值，就采用线性插值
+    
+
+
+#再进行一次归一化
 from tslearn.preprocessing import TimeSeriesScalerMinMax
 scaler = TimeSeriesScalerMeanVariance(mu=0., std=1.)
 stdData = scaler.fit_transform(stdData)
