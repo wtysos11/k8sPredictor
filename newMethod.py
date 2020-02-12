@@ -135,9 +135,22 @@ n_paa_segments = 20
 paa = PiecewiseAggregateApproximation(n_segments=n_paa_segments)
 paa_mid = paa.fit_transform(stdData)
 paa_inv = paa.inverse_transform(paa_mid)
-
+paa_inv = paa_inv.reshape(paa_inv.shape[0],paa_inv.shape[1])
 
 # 4.对PAA后的数据进行简单k-means，聚类数量不超过10，分数按照CH分数判断，选出最大的
+# 再进行rank-base处理，然后做简单聚类
+from sklearn.cluster import MiniBatchKMeans,KMeans,DBSCAN,SpectralClustering,Birch
+from sklearn.metrics import calinski_harabasz_score,davies_bouldin_score
+
+n_cluster = 1000
+s = time.time()
+km = KMeans(n_clusters = n_cluster,random_state = 0)
+y_pre = km.fit_predict(paa_inv)
+e = time.time()
+print(e-s,"s")
+print(calinski_harabasz_score(paa_inv,y_pre))
+
+
 
 # 5.然后进行更进一步的聚类操作，对于每一个聚类进行详细聚类
 
@@ -152,7 +165,16 @@ def getClstData(originData,clstData):
         ans[ele].append(index)
     return ans #可以通过numpy数组的索引，通过访问原始数据来访问聚类数据
 
+# 新的评价指标：只考虑在基线中心附近一定范围内的时间序列的内聚度，超过这个范围则完全不考虑。
+# getCenter函数，目标是得到指定聚类的中心
+def getCenter(originData,y_pre,clusNum):
+    clusData = originData[y_pre==clusNum]
+    center = sum(clusData)/clusData.shape[0]
+    return center
 
+# 衡量两个给定时间序列之间的欧式距离（默认其等长）
+def getDist(vec1,vec2):
+    return np.linalg.norm(vec1 - vec2)
 
 # 6.对属于同一聚类的基线数据，进行预测。
 
@@ -161,3 +183,5 @@ def getClstData(originData,clstData):
 # 8.然后将数据整合起来，形成对最终结果的预测
 
 # 9.进行实验
+
+# 对于聚类指标，可以不考虑没有聚类进来的时间序列，比如距离聚类中心一定距离的聚类的数量或比例等。依据实际情况来定。
