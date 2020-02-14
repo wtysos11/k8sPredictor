@@ -332,7 +332,3 @@ originData = to_time_series_dataset(list(data.values()))
 stdData = getStdData(originData)
 norData = get01Data(stdData)
 
-# 第一层聚类，要求：速度较快，容错较高
-
-# 尝试一
-
