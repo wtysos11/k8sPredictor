@@ -72,7 +72,6 @@ import numpy as np
 # 时间序列：异常点排除一为方法1
 # 时间序列：异常点排除方法2：对原数据进行归一化。将所有数据减去平均值的绝对值后排序，去除5%，并进行线性插值
 
-import numpy as np
 ratio = 0.05 #异常点数量
 
 #归一化
@@ -127,35 +126,20 @@ for index,row in enumerate(stdData):
 #再进行一次归一化
 from tslearn.preprocessing import TimeSeriesScalerMinMax
 scaler = TimeSeriesScalerMeanVariance(mu=0., std=1.)
-originStdData = stdData # 保存，为了日后恢复
+originStdData = stdData
 stdData = scaler.fit_transform(stdData)
+# 新方法开始部分
 
-# 3.然后进行PAA处理，得到基线和残余值
-from tslearn.piecewise import PiecewiseAggregateApproximation
-n_paa_segments = 20
-paa = PiecewiseAggregateApproximation(n_segments=n_paa_segments)
-paa_mid = paa.fit_transform(stdData)
-paa_inv = paa.inverse_transform(paa_mid)
-paa_inv = paa_inv.reshape(paa_inv.shape[0],paa_inv.shape[1])
-
-# 4.对PAA后的数据进行简单k-means，聚类数量不超过10，分数按照CH分数判断，选出最大的
-# 再进行rank-base处理，然后做简单聚类
 from sklearn.cluster import MiniBatchKMeans,KMeans,DBSCAN,SpectralClustering,Birch
-from sklearn.metrics import calinski_harabasz_score,davies_bouldin_score
+from sklearn.metrics import silhouette_score,calinski_harabasz_score
 
-n_cluster = 1000
-s = time.time()
-km = KMeans(n_clusters = n_cluster,random_state = 0)
-y_pre = km.fit_predict(paa_inv)
-e = time.time()
-print(e-s,"s")
-print(calinski_harabasz_score(paa_inv,y_pre))
+from statsmodels.tsa.arima_model import ARIMA,ARMA
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+import statsmodels.api as sm
 
+# 数据处理部分
 
-
-# 5.然后进行更进一步的聚类操作，对于每一个聚类进行详细聚类
-
-#----#
+#工具人函数
 # 求数据距离中心的平均距离
 def getAvgDist(data):
     center = sum(data)/data.shape[0]
@@ -247,85 +231,6 @@ def getScore4Cluster(originData,y_pre,ratio):
         score += getScore(originData,y_pre,i,epsilon)
     return score/(clusNum+1) 
 
-
-# 6.对属于同一聚类的基线数据，进行预测。
-
-# 7.对于聚类内部的每个元素，自行预测自己的残余值数据。（可以使用SAX进行噪点去除）
-
-# 8.然后将数据整合起来，形成对最终结果的预测
-
-# 9.进行实验
-
-# 对于聚类指标，可以不考虑没有聚类进来的时间序列，比如距离聚类中心一定距离的聚类的数量或比例等。依据实际情况来定。
-
-
-# -------- #
-# 接下来的考量是根据三种不同的方法来进行，以最终结果为准
-#首先计算epsilon
-data = paa_mid
-epsilon = getEpsilon(data)
-print('method1 episilon:',epsilon)
-# 1. 朴素MiniBatchKmeans直接进行大规模聚类，聚类数量为1000
-from sklearn.cluster import MiniBatchKMeans
-kNum = 100
-s = time.time()
-km = MiniBatchKMeans(n_clusters = kNum,init_size = 3*kNum,random_state = 0,batch_size = 50)
-y_pre = km.fit_predict(data)
-e = time.time()
-print('method1 :',e-s,' s')
-playClus(data,y_pre,10)
-total = 0
-for i in range(kNum):
-    total += getScore(data,y_pre,i,epsilon)
-print(total/kNum)
-
-# 两步聚类法分别使用rank-base和原始数据进行一次尝试
-# 2. 使用Kmeans进行10以内的简单聚类。再用Kmeans对每个小聚类再进行聚类
-from sklearn.cluster import KMeans
-firstClus = 10
-s = time.time()
-km = KMeans(n_clusters = firstClus,random_state = 0)
-y_pre = km.fit_predict(data)
-#对每个聚类进行10聚类
-secondClus = 10
-totalScore = 0
-# 对每个聚类产生一个新的数据，对这个数据进行再次聚类并且求出相关的系数
-for k in range(firstClus):
-    newData = data[y_pre == k]
-    epsilon = getEpsilon(newData)
-    km = KMeans(n_clusters = secondClus,random_state= 0)
-    y_new_pre = km.fit_predict(newData)
-    score = 0
-    for i in range(secondClus):
-        score += getScore(newData,y_new_pre,i,epsilon)
-    totalScore += score/secondClus
-print(totalScore/firstClus)
-e = time.time()
-print('method2:',e-s,'s')
-
-# 3. 使用Kmeans进行10以内的简单聚类。再用其他聚类方式进行聚类
-
-# 第一层聚类，要求：速度较快，容错较高
-# 第一种情况：是否使用rank-base向量作为原始数据
-# 第二种情况：是直接使用Birch进行聚类还是使用Birch聚类后再将kmeans导入
-# 评价方式：三个：silhou系数，CH指数和我的分数
-
-# 尝试一 普通数据，单纯Birch
-from sklearn.metrics import silhouette_score
-from sklearn.cluster import KMeans,Birch
-data = paa_mid
-
-firstClus = 10
-s = time.time()
-y_pre = Birch(n_clusters=None,threshold = getEpsilon(data,0.8)).fit_predict(data)
-e = time.time()
-print(silhouette_score(data,y_pre))
-print(getScore4Cluster(data,y_pre,0.4))
-print(max(y_pre))
-playClus(data,y_pre,10)
-
-# 第一次聚类，4种情况，尽管按照通常指标是不同算法更优，但最终结果不一定。
-# 1. 是否使用rank-base数据
 # 给定一个m个特征的数据，返回其rank-base表示
 def rankbased(origindata):
     ele = origindata.copy()
@@ -335,40 +240,32 @@ def rankbased(origindata):
         ans[i] = np.where(ele==ans[i])[0][0]
     del ele
     return ans
+#################################################################
+# 初始，根据原始数据计算新数据
 
-s = time.time()
+n_paa_segments = 20
+paa = PiecewiseAggregateApproximation(n_segments=n_paa_segments)
+paa_mid = paa.fit_transform(stdData)
+paa_inv = paa.inverse_transform(paa_mid)
+paa_mid = paa_mid.reshape(paa_mid.shape[0],paa_mid.shape[1])
+
 first_clus = paa_mid.copy()
 for i in range(len(first_clus)):
     first_clus[i] = rankbased(paa_mid[i])
 
-e = time.time()
-# 2. 方法：使用Birch，使用Birch后将数据导入到kMeans
-## 只使用Birch
-data = paa_mid
-from sklearn.cluster import KMeans
-firstClus = 10
-s = time.time()
-y_pre = Birch(n_clusters=None,threshold = getEpsilon(first_clus,0.8)).fit_predict(data)
-e = time.time()
-print(e-s,'s')
-print(silhouette_score(data,y_pre))
-print(getScore4Cluster(data,y_pre,0.4))
-print('cluster Number',max(y_pre))
-playClus(data,y_pre,10)
 
-## 将Birch的值导入到Kmeans中
-data = paa_mid
+#################################################################
+# 第一次聚类使用Birch跑出初始，然后使用Kmeans细分。数据使用rank-base
+# 改进：直接使用原始数据，调整Birch的threshold
+data = first_clus
 s = time.time()
 y_pre = Birch(n_clusters=None,threshold = getEpsilon(data,0.8)).fit_predict(data)
 y_pre = KMeans(n_clusters = max(y_pre)+1,random_state = 0).fit_predict(data)
 e = time.time()
-print(e-s,'s')
-print(silhouette_score(data,y_pre))
-print(getScore4Cluster(data,y_pre,0.4))
-print('cluster Number',max(y_pre))
-playClus(data,y_pre,10)
 
-## 使用gap statistics判定k值
+#################################################################
+# 第二次聚类使用10以内间隔2的gap statistics。聚类对象为残差
+# 改进：可以考虑聚类对象是残差或直接是标准数据
 import pandas as pd
 def optimalK(data, nrefs=3, maxClusters=15):
     """
@@ -381,7 +278,7 @@ def optimalK(data, nrefs=3, maxClusters=15):
     """
     gaps = np.zeros((len(range(1, maxClusters)),))
     resultsdf = pd.DataFrame({'clusterCount':[], 'gap':[]})
-    for gap_index, k in enumerate(range(1, maxClusters,5)):
+    for gap_index, k in enumerate(range(1, maxClusters,2)):
         # Holder for reference dispersion results
         refDisps = np.zeros(nrefs)
 
@@ -414,125 +311,78 @@ def optimalK(data, nrefs=3, maxClusters=15):
 
     return (gaps.argmax() + 1, resultsdf)  # Plus 1 because index of 0 means 1 cluster is optimal, index 2 = 3 clusters are optimal
 
-# 第二次聚类，两种情况
-# 第二次聚类可以选做，因为有些情况不一定需要第二次聚类。
-# 1. 从效果上来说，gap statistics第一次聚类跑不出来效果。但是第二次聚类是可以的，因为第二次聚类的数量比较少。
-# 从实际观察上来说，第二次聚类不应该超过10个类，因此第一次聚类的质量应该要足够的好。
-# 尝试应该至少两次，即最大值和次大值
-# --- # 测试用
-data = paa_mid[y_pre==0]
-s = time.time()
-kNum = 5
-km = KMeans(n_clusters = kNum,random_state = 0)
-y_pre_t = km.fit_predict(data)
-e = time.time()
-print(e-s,'s')
-print(silhouette_score(data,y_pre_t))
-print('cluster Number',max(y_pre_t))
-playClus(data,y_pre_t,5)
+# 对于给定的一次聚类数据，自行进行二次聚类，并且返回聚类结果
+# 第一种实现，使用gap statistic跑出k值
+# 此处的data为特定的聚类结果，比如data[y_pre==k]
+def getSecondClus_1(data):
+    k, _ = optimalK(data, nrefs=5, maxClusters=10)
+    km = KMeans(n_clusters = k,random_state= 0)
+    y_pre = km.fit_predict(data)
+    return y_pre
 
+#第二种实现，使用中位数Birch聚类
+def getSecondClus_2(data):
+    epsilon = getEpsilonFromtiny(data)
+    y_pre = Birch(n_clusters= None,threshold=epsilon).fit_predict(data)
+    return y_pre
 
-
-# 结合前面的一次聚类与二次聚类结果
-###########################################################
-# 1. 使用Birch + Kmeans
-from sklearn.cluster import KMeans
-data = paa_mid
-s = time.time()
-y_pre = Birch(n_clusters=None,threshold = getEpsilon(data,0.8)).fit_predict(data)
-e = time.time()
-print('first cluster time:',e-s,'s')
-print('cluster Number',max(y_pre))
-
+#对于标准数据耗时300s左右
 cluster_num = max(y_pre)
 totalClusterNum = 0 #前面最小的聚类数
 ans = np.zeros(len(y_pre))# 全0的数组，用来保存最后的结果
 for k in range(cluster_num + 1):
-    newData = data[y_pre == k]
-    second_y = getSecondClus_1(newData)
+    paaData = paa_mid[y_pre == k]
+    originData = stdData[y_pre==k]
+    baseData = paa.inverse_transform(paaData)
+    restData = originData - baseData #计算得到残差数据
+    restData = restData.reshape(restData.shape[0],restData.shape[1])
     second_iter = np.where(y_pre == k)[0]
-    for index,ele in enumerate(second_iter):
-        ans[ele] = second_y[index] + totalClusterNum
-    totalClusterNum += max(second_y) + 1 
 
-# 最后得到的ans即为最终的结果
+    if len(restData) < 15:#如果聚类过小，不进行第二次聚类
+        for index,ele in enumerate(second_iter):
+            ans[ele] = totalClusterNum
+        totalClusterNum += 1
+    else:
+        second_y = getSecondClus_1(restData)
+        for index,ele in enumerate(second_iter):
+            ans[ele] = second_y[index] + totalClusterNum
+        totalClusterNum += max(second_y) + 1 
 
+# 第二次聚类完毕，得到的结果是ans，里面是按顺序存储的聚类数据。totalClusterNum是总聚类数量
+# 初步得到的聚类数量为1463个聚类
+#################################################################
+# 第三步：整体预测。提取出聚类中心并对其进行预测，将结果作为聚类中所有值的最终结果
+store = []
+for k in range(totalClusterNum):
+    stdClusData = stdData[ans == k]
+    store.append(sum(stdClusData)/stdClusData.shape[0])
 
-
-# 预测系统
-# 普通ARIMA。因为数据比较少，普通ARIMA应该就够用了。
-# 智能算法，比如人工神经网络。（暂时不考虑）
-
-# 剩余预测：根据剩余值进行预测
-
-# 返回值
-# 要求：需要前面两次提取基线的时候保留平均值和方差以方便后面恢复
-# 
-
-# 最终评价指标：能够正确预测的流量数量（折返回去的预测值）
-
-# 组装两次聚类
-# 第一次聚类跑出来一个结果y_first_pre
-# 对于第一次中的每一个聚类，进行再次聚类。同时可以考虑建立一个判别体系，对于已经足够好的聚类无需第二次聚类，判别方法以距离聚类中心的欧式距离为判定表尊
-# 如果有90%的时间序列在范围内，可以考虑不用进行第二次聚类。否则则进行第二次聚类。这个范围应该由最终结果反推。
-# 对每个第一次聚类跑出一个第二次聚类，平均十几个数据一个类别。
-
-from statsmodels.tsa.arima_model import ARMA
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-
-model = ARMA(data,order=(2,2))
-result = model.fit()
-pre = model.predict(params = result.params,start = 1,end = len(data) + 1)
-
-## ARIMA对于较短且变化剧烈的时间序列表现不佳
-# 长期：7天为时间窗口的决策树回归算法/考虑在更长的周期上展开ARIMA 或者使用LSTM算法
-# 周期性较强的短期数据可以直接使用ARIMA算法
-
-# 长期
-
-# 工具函数，生成指定长度的时间窗口
-# 最后生成的格式是长度 * 1 * 时间窗口大小
+#################################################################
+# 第四步：预测。建立模型对该数据进行预测（决策树回归模型），接受480个数据预测20个
+# 改进：可以考虑与基线+残差双ARIMA预测方法进行比较，以及要与基础的普通决策树回归预测方法进行比较
+from sklearn.svm import SVR
+from sklearn.model_selection import GridSearchCV
+#返回滑动窗口
 def getWindow(data,window_size):
     x = []
-    for t in range(len(data)-window_size):
+    for t in range(len(data)-window_size+1):
         a = data[t:t+window_size]
         x.append(a)
     x = np.array(x)
-    x = np.reshape(x,(len(x),1,window_size))
+    x = np.reshape(x,(len(x),window_size))
     return x
 
-# 1. ARIMA，自动参数。问题：参数太高不一定跑的出来。
-data = paa_mid[0]
-# order = sm.tsa.arma_order_select_ic(data,ic='aic')['aic_min_order'] #参数太高不一定跑的出来
-model = ARMA(data,order=(2,2))
-result = model.fit()
-pre = model.predict(params = result.params,start = 1,end = len(data))
-plt.plot(data)
-plt.plot(pre)
-plt.show()
-
-# 2. 假设以周为周期，最简单的前序神经网络7-1
-from sklearn.svm import SVR
-from sklearn.model_selection import GridSearchCV
-
-window_size = 7
-train_data = getWindow(data,window_size)
-svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,
-                   param_grid={"C": [1e0, 1e1, 1e2, 1e3],
-                               "gamma": np.logspace(-2, 2, 5)})
-svr.fit(train_data[:-1],data[window_size:])
-ans = svr.predict(train_data)
-
-
-# 3. 决策树分类，同样是以一周为时间窗口
-
-# 4. 观察数据，考虑是否直接使用自定义的周期模型。（模式提取+套用）
-
-
-# 想法二：
-# 聚类一按照基线进行，聚类二按照残差进行，然后将二者合并
-# 为什么不按照方法一：基线提取法有点问题，而且基线数据太少。本次暂时只考虑短期数据，长期数据可能并不具有代表性
-
-# 需要对比使用ARIMA进行基线预测与ARIMA进行残差预测的结果，最好是在还原会原始数据后进行比较
-
-# 方案二：
+# 使用方法：决策树集成回归 + 时间窗口法
+# 预测结果，给出预测数据，预测步数，得到预测结果,全部结果
+def getPredictResultWithSlidingWindows(data,step):
+    window_size = 7
+    X_train = getWindow(data[:-1],window_size)
+    y_train = data[window_size:]
+    svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,
+                       param_grid={"C": [1e0, 1e1, 1e2, 1e3],
+                                   "gamma": np.logspace(-2, 2, 5)})
+    svr.fit(X_train,y_train)
+    ans = svr.predict(X_train)
+    return ans
+#################################################################
+# 第五步：回归。将预测数据倒回原始数据进行回归
