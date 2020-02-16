@@ -126,7 +126,7 @@ for index,row in enumerate(stdData):
 #再进行一次归一化
 from tslearn.preprocessing import TimeSeriesScalerMinMax
 scaler = TimeSeriesScalerMeanVariance(mu=0., std=1.)
-originStdData = stdData
+originStdData = stdData.copy()
 stdData = scaler.fit_transform(stdData)
 # 新方法开始部分
 
@@ -242,11 +242,14 @@ def rankbased(origindata):
     return ans
 #################################################################
 # 初始，根据原始数据计算新数据
+# 从paa这里
 
-n_paa_segments = 20
+# 需要在聚类前将训练数据划分完毕。ratio必须要精心选择使得paa的值能够成为整数
+
+ratio = 0.9
+n_paa_segments = 18
 paa = PiecewiseAggregateApproximation(n_segments=n_paa_segments)
-paa_mid = paa.fit_transform(stdData)
-paa_inv = paa.inverse_transform(paa_mid)
+paa_mid = paa.fit_transform(stdData[:,:int(ratio*stdData.shape[1])])
 paa_mid = paa_mid.reshape(paa_mid.shape[0],paa_mid.shape[1])
 
 first_clus = paa_mid.copy()
@@ -329,10 +332,10 @@ def getSecondClus_2(data):
 #对于标准数据耗时300s左右
 cluster_num = max(y_pre)
 totalClusterNum = 0 #前面最小的聚类数
-ans = np.zeros(len(y_pre))# 全0的数组，用来保存最后的结果
+secondClusans = np.zeros(len(y_pre))# 全0的数组，用来保存最后的结果
 for k in range(cluster_num + 1):
     paaData = paa_mid[y_pre == k]
-    originData = stdData[y_pre==k]
+    originData = stdData[:,:int(ratio*stdData.shape[1])][y_pre==k]
     baseData = paa.inverse_transform(paaData)
     restData = originData - baseData #计算得到残差数据
     restData = restData.reshape(restData.shape[0],restData.shape[1])
@@ -340,21 +343,21 @@ for k in range(cluster_num + 1):
 
     if len(restData) < 15:#如果聚类过小，不进行第二次聚类
         for index,ele in enumerate(second_iter):
-            ans[ele] = totalClusterNum
+            secondClusans[ele] = totalClusterNum
         totalClusterNum += 1
     else:
         second_y = getSecondClus_1(restData)
         for index,ele in enumerate(second_iter):
-            ans[ele] = second_y[index] + totalClusterNum
+            secondClusans[ele] = second_y[index] + totalClusterNum
         totalClusterNum += max(second_y) + 1 
 
-# 第二次聚类完毕，得到的结果是ans，里面是按顺序存储的聚类数据。totalClusterNum是总聚类数量
+# 第二次聚类完毕，得到的结果是secondClusans，里面是按顺序存储的聚类数据。totalClusterNum是总聚类数量
 # 初步得到的聚类数量为1463个聚类
 #################################################################
 # 第三步：整体预测。提取出聚类中心并对其进行预测，将结果作为聚类中所有值的最终结果
 store = []
 for k in range(totalClusterNum):
-    stdClusData = stdData[ans == k]
+    stdClusData = stdData[secondClusans == k]
     store.append(sum(stdClusData)/stdClusData.shape[0])
 
 #################################################################
@@ -362,6 +365,7 @@ for k in range(totalClusterNum):
 # 改进：可以考虑与基线+残差双ARIMA预测方法进行比较，以及要与基础的普通决策树回归预测方法进行比较
 from sklearn.svm import SVR
 from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import mean_squared_error
 #返回滑动窗口
 def getWindow(data,window_size):
     x = []
@@ -372,17 +376,73 @@ def getWindow(data,window_size):
     x = np.reshape(x,(len(x),window_size))
     return x
 
+# 用于GridSearchCV调参的
+def print_best_score(gsearch,param_test):
+     # 输出best score
+    print("Best score: %0.3f" % gsearch.best_score_)
+    print("Best parameters set:")
+    # 输出最佳的分类器到底使用了怎样的参数
+    best_parameters = gsearch.best_estimator_.get_params()
+    for param_name in sorted(param_test.keys()):
+        print("\t%s: %r" % (param_name, best_parameters[param_name]))
+
+
+# 离线检验
 # 使用方法：决策树集成回归 + 时间窗口法
 # 预测结果，给出预测数据，预测步数，得到预测结果,全部结果
-def getPredictResultWithSlidingWindows(data,step):
+# data为一维向量
+def getPredictResultWithSlidingWindows(data):
+    ratio = 0.9 #测试数据为10%
     window_size = 7
-    X_train = getWindow(data[:-1],window_size)
-    y_train = data[window_size:]
-    svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,
-                       param_grid={"C": [1e0, 1e1, 1e2, 1e3],
-                                   "gamma": np.logspace(-2, 2, 5)})
-    svr.fit(X_train,y_train)
-    ans = svr.predict(X_train)
-    return ans
+    X_train = getWindow(data[:int(len(data)*ratio)],window_size)
+    y_train = data[window_size:int(len(data)*ratio)+1]
+    #param_test = {"C": [1e0, 1e1, 1e2, 1e3], "gamma": np.logspace(-2, 2, 5)}
+    #svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,param_grid=param_test)
+    #svr.fit(X_train,y_train.ravel())
+    #print_best_score(svr,param_test)
+    svr = SVR(kernel='rbf',gamma='scale')
+    svr.fit(X_train,y_train.ravel())
+
+    X_test = getWindow(data[int(len(data)*ratio):-1],window_size)
+    y_test = data[int(len(data)*ratio)+window_size:]
+    y_prediction = svr.predict(X_test)
+    return y_test,y_prediction
+
+s = time.time()
+window_size = 7
+for i in range(len(store)):
+    y_test,y_prediction = getPredictResultWithSlidingWindows(store[i])
+    store[i] = y_prediction
+e = time.time()
+print('predict time:',e-s,'s')
+
 #################################################################
 # 第五步：回归。将预测数据倒回原始数据进行回归
+
+# 将数据与原始数据进行对比，同时完成归一化
+
+
+# 逆归一化过程
+label = y_pre[k]
+origin = store[label]
+m = origin * np.sqrt(np.var(originStdData[k])) + np.mean(originStdData[k])
+preAns = m * np.sqrt(np.var(formatted_dataset[k])) + np.mean(formatted_dataset[k])
+data = formatted_dataset[k]
+score = getDist(data[int(len(data)*ratio)+window_size:],preAns)
+print(score)
+
+
+k = 0
+# 聚类中心与原始的对比
+mid = stdData[secondClusans == y_pre[k]]
+center = sum(mid)/mid.shape[0]
+plt.plot(center)
+plt.plot(stdData[k])
+plt.show()
+
+# 预测效果与原始的对比
+plt.plot(store[y_pre[k]])
+plt.plot(stdData[k,int(len(data)*ratio)+window_size:])
+plt.show()
+
+##
