@@ -336,17 +336,15 @@ secondClusans = np.zeros(len(y_pre))# 全0的数组，用来保存最后的结�
 for k in range(cluster_num + 1):
     paaData = paa_mid[y_pre == k]
     originData = stdData[:,:int(ratio*stdData.shape[1])][y_pre==k]
-    baseData = paa.inverse_transform(paaData)
-    restData = originData - baseData #计算得到残差数据
-    restData = restData.reshape(restData.shape[0],restData.shape[1])
+    originData = originData.reshape(originData.shape[0],originData.shape[1])
     second_iter = np.where(y_pre == k)[0]
 
-    if len(restData) < 15:#如果聚类过小，不进行第二次聚类
+    if len(originData) < 15:#如果聚类过小，不进行第二次聚类
         for index,ele in enumerate(second_iter):
             secondClusans[ele] = totalClusterNum
         totalClusterNum += 1
     else:
-        second_y = getSecondClus_1(restData)
+        second_y = getSecondClus_1(originData)
         for index,ele in enumerate(second_iter):
             secondClusans[ele] = second_y[index] + totalClusterNum
         totalClusterNum += max(second_y) + 1 
@@ -403,8 +401,8 @@ def getPredictResultWithSlidingWindows(data):
     svr = SVR(kernel='rbf',gamma='scale')
     svr.fit(X_train,y_train.ravel())
 
-    X_test = getWindow(data[int(len(data)*ratio):-1],window_size)
-    y_test = data[int(len(data)*ratio)+window_size:]
+    X_test = getWindow(data[int(len(data)*ratio)+1 - window_size:-1],window_size)
+    y_test = data[int(len(data)*ratio)+1:]
     y_prediction = svr.predict(X_test)
     return y_test,y_prediction
 
@@ -444,5 +442,3 @@ plt.show()
 plt.plot(store[y_pre[k]])
 plt.plot(stdData[k,int(len(data)*ratio)+window_size:])
 plt.show()
-
-##
