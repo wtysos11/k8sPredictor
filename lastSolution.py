@@ -419,26 +419,18 @@ print('predict time:',e-s,'s')
 
 # 将数据与原始数据进行对比，同时完成归一化
 
+from sklearn.metrics import mean_squared_error
+score = 0
+ratioScore = 0
 
-# 逆归一化过程
-label = y_pre[k]
-origin = store[label]
-m = origin * np.sqrt(np.var(originStdData[k])) + np.mean(originStdData[k])
-preAns = m * np.sqrt(np.var(formatted_dataset[k])) + np.mean(formatted_dataset[k])
-data = formatted_dataset[k]
-score = getDist(data[int(len(data)*ratio)+window_size:],preAns)
-print(score)
-
-
-k = 0
-# 聚类中心与原始的对比
-mid = stdData[secondClusans == y_pre[k]]
-center = sum(mid)/mid.shape[0]
-plt.plot(center)
-plt.plot(stdData[k])
-plt.show()
-
-# 预测效果与原始的对比
-plt.plot(store[y_pre[k]])
-plt.plot(stdData[k,int(len(data)*ratio)+window_size:])
-plt.show()
+for k in range(len(formatted_dataset)):
+    label = secondClusans[k]
+    repres = store[int(label)]
+    m = repres * np.sqrt(np.var(originStdData[k])) + np.mean(originStdData[k])
+    predictAns = m * np.sqrt(np.var(formatted_dataset[k])) + np.mean(formatted_dataset[k])
+    data = formatted_dataset[k]
+    mse = mean_squared_error(data[int(ratio*len(data))+1:],predictAns)
+    score += mse
+    ratioScore += mse/np.mean(formatted_dataset[k])
+print(score/len(formatted_dataset))
+print(ratioScore/len(formatted_dataset))
