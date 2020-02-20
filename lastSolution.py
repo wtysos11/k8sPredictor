@@ -1,3 +1,4 @@
+# Birch论文 A BIRCH-Based Clustering Method for Large Time Series Databases
 # 固定读取部分
 import os
 fileName = 'result.txt'
@@ -423,14 +424,86 @@ from sklearn.metrics import mean_squared_error
 score = 0
 ratioScore = 0
 
+predictResult = []
 for k in range(len(formatted_dataset)):
     label = secondClusans[k]
     repres = store[int(label)]
     m = repres * np.sqrt(np.var(originStdData[k])) + np.mean(originStdData[k])
     predictAns = m * np.sqrt(np.var(formatted_dataset[k])) + np.mean(formatted_dataset[k])
+    predictResult.append(predictAns)
     data = formatted_dataset[k]
     mse = mean_squared_error(data[int(ratio*len(data))+1:],predictAns)
     score += mse
     ratioScore += mse/np.mean(formatted_dataset[k])
 print(score/len(formatted_dataset))
 print(ratioScore/len(formatted_dataset))
+
+# 对照组：对原始时间序列直接进行预测，两者的差距
+oppo = []
+score = 0
+ratioScore = 0
+
+s = time.time()
+window_size = 7
+for i in range(len(formatted_dataset)):
+    y_test,y_prediction = getPredictResultWithSlidingWindows(formatted_dataset[i])
+    oppo.append(y_prediction)
+    data = formatted_dataset[i]
+    mse = mean_squared_error(data[int(ratio*len(data))+1:],predictAns)
+    score += mse
+    ratioScore += mse/np.mean(formatted_dataset[i])
+e = time.time()
+print('predict time:',e-s,'s')
+print(score/len(formatted_dataset))
+print(ratioScore/len(formatted_dataset))
+
+######################################################
+# 模拟。对于每一个测试数据，构造预测器，并且模拟预测数据
+# 模拟器：读入真实数据与预测数据，并进行线性插值，单位为分钟。容器从拉起到分配流量时间定为1分钟，调度器以分钟为单位进行调度。
+
+# 主程序：模拟器。
+# 输入：两端时间序列（真实值与预测值），长度为48个点，每个点一个小时
+# 输出：模拟的响应时间序列
+# 假设：存在一个理想的负载平衡器，能够平均将所有流量分配给每一个容器，且最大平均流量不超过150req/s（超过的则拒绝服务）
+# 1. 容器从进行调度到负载流量需要1分钟。
+# 2. 每分钟进行一次调度判断操作
+
+# 辅助程序：调度器
+# 根据预测数据判断是否进行调度：首先看预测数据与实际数据的差值，如果差值足够小，则按照预测器数据进行。如果差值过大，则将预测器的变动作为参考（拐点预测器），以阈值法进行调度。如果拐点预测继续失败，则回归原始预测器
+# 需要注意：流量只可能是整数，需要进行取整操作
+
+#本步骤的结果会反过来影响前面的结论，请慎重进行
+
+i = 0
+predictOne = predictResult[i]
+predictTwo = oppo[i]
+data = formatted_dataset[i]
+realOne = data[int(ratio*len(data))+1:]
+
+# 得到线性插值结果，每个点插60个值。2个点61,3个点121
+def getLine(line):
+    result = np.zeros((len(line)-1)*60+1)
+    for i in range(len(line)):
+        if i==0:
+            result[0] = line[0]
+        else:
+            result[i*60] = line[i]
+            #进行插值
+            delta = (line[i]-line[i-1])/60
+            for j in range(59): #对中间的59个点进行插值处理
+                result[(i-1)*60+j+1] = result[(i-1)*60]+delta * (j+1)
+    return result
+
+# 根据流量得到响应时间的函数
+def getResponseTime(traffic):
+    data = [0,10,29,42,62,85,140,168,209,250,269,283,329,378,390,467,579]
+    if traffic > 150:
+        return 1500
+    else:
+        if traffic % 10 ==0:
+            return data[traffic//10]
+        else:
+            num = traffic//10
+            delta = (data[num+1]-data[num])/10
+            d = traffic - num*10
+            return data[num] + d*delta
