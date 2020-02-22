@@ -241,6 +241,8 @@ def rankbased(origindata):
         ans[i] = np.where(ele==ans[i])[0][0]
     del ele
     return ans
+
+
 #################################################################
 # 初始，根据原始数据计算新数据
 # 从paa这里
@@ -474,11 +476,7 @@ print(ratioScore/len(formatted_dataset))
 
 #本步骤的结果会反过来影响前面的结论，请慎重进行
 
-i = 0
-predictOne = predictResult[i]
-predictTwo = oppo[i]
-data = formatted_dataset[i]
-realOne = data[int(ratio*len(data))+1:]
+
 
 # 得到线性插值结果，每个点插60个值。2个点61,3个点121
 def getLine(line):
@@ -496,6 +494,7 @@ def getLine(line):
 
 # 根据流量得到响应时间的函数
 def getResponseTime(traffic):
+    traffic = int(traffic)
     data = [0,10,29,42,62,85,140,168,209,250,269,283,329,378,390,467,579]
     if traffic > 150:
         return 1500
@@ -507,3 +506,191 @@ def getResponseTime(traffic):
             delta = (data[num+1]-data[num])/10
             d = traffic - num*10
             return data[num] + d*delta
+
+# 预测算法，关键是预测趋势和拐点。
+# 取得趋势
+def getTrend(data):
+    if data[2]>data[1] and data[1]>data[0]:
+        return 1
+    elif data[2]<data[1] and data[1]<data[0]:
+        return -1
+    return 0
+
+# 根据过去和现在的真实数据和预测数据预测下一分钟的容器数量
+# real的为之前的观测值，pred为之前的预测值加上当前的预测值
+def getContainer(real,pred,responseTime,containerNum):
+    # 如果当前的预测值与真实值很接近，则直接按照预测值预测
+    # 如果当前的预测值与真实值不接近，但是斜率接近，则按照预测值预测斜率
+    # 如果都不接近，则转为阈值法调度器，直接按照响应时间预测。对于超过200的响应时间直接+1
+    delta = 80
+    if abs(real[-1]-pred[-2])<delta:#如果在范围以内。可能性很小，适用于拟合的比较好的情况（比如单个的预测）
+        p = pred[-1]//80
+        if p < 1:
+            p = 1
+        return p
+    
+    # 后续，提取趋势进行预测
+    # 如何进行趋势判断，我认为还是要取斜率。
+    # 如果三点同趋势，
+        # 趋势与真实数据趋势相同：将三点斜率转成角度取加权平均后再转成斜率进行预测
+    if len(real)>=3:
+        s1 = getTrend(real[-3:])
+        s2 = getTrend(pred[-4:-1])
+        if s1 == s2:# 趋势相同
+            realDelta = 0.66*abs(real[-1]-real[-2]) + 0.33*abs(real[-2]-real[-3])
+            predDelta = 0.66*abs(pred[-2]-pred[-3]) + 0.33*abs(pred[-3]-pred[-4])
+            if abs(predDelta-realDelta)/realDelta < 0.5: #误差在一定范围以内，直接预测
+                if abs(s1)>0:#不是拐点，则依据前面的值加权处理
+                    futureTraffic = real[-1]+0.5*(pred[-1]-pred[-2])+0.5*(pred[-2]-pred[-3])
+                    p = futureTraffic//80
+                    if p<1:
+                        p=1
+                    return p
+                else: #如果是拐点，则按照拐点进行预测。不直接枚举预测下降是为了避免预测错误
+                    futureTraffic = real[-1]+(pred[-1]-pred[-2])
+                    p = futureTraffic//80
+                    if p<1:
+                        p=1
+                    return p
+                    
+    # 阈值法只根据当前是否超时/过低来判断是否需要增减
+    if responseTime > 250:
+        containerNum += 1
+    elif responseTime < 100:
+        containerNum -= 1
+    if containerNum < 1:
+        containerNum = 1
+    return containerNum
+
+#判断预测器是否进行了预测
+def isGetPrediction(real,pred):
+    # 如果当前的预测值与真实值很接近，则直接按照预测值预测
+    # 如果当前的预测值与真实值不接近，但是斜率接近，则按照预测值预测斜率
+    # 如果都不接近，则转为阈值法调度器，直接按照响应时间预测。对于超过200的响应时间直接+1
+    delta = 80
+    if abs(real[-1]-pred[-2])<delta:#如果在范围以内。可能性很小，适用于拟合的比较好的情况（比如单个的预测）
+        p = pred[-1]//80
+        if p < 1:
+            p = 1
+        return True
+    
+    # 后续，提取趋势进行预测
+    # 如何进行趋势判断，我认为还是要取斜率。
+    # 如果三点同趋势，
+        # 趋势与真实数据趋势相同：将三点斜率转成角度取加权平均后再转成斜率进行预测
+    if len(real)>=3:
+        s1 = getTrend(real[-3:])
+        s2 = getTrend(pred[-4:-1])
+        if s1 == s2:# 趋势相同
+            realDelta = 0.66*abs(real[-1]-real[-2]) + 0.33*abs(real[-2]-real[-3])
+            predDelta = 0.66*abs(pred[-2]-pred[-3]) + 0.33*abs(pred[-3]-pred[-4])
+            if abs(predDelta-realDelta)/realDelta < 0.5: #误差在一定范围以内，直接预测
+                return True
+    return False
+                    
+#根据所给的数据，返回单纯使用响应式调度所得到的时间
+def reactionSimu(data):
+    response = []
+    conNum = []
+    simu_real = getLine(data/60)#将小时平均到分钟，并进行插值
+    containerNum = int(simu_real[0]/80)#初始容器数
+    futureNum = int(simu_real[0]/80)
+    for i in range(len(simu_real)):# 进行模拟，单位为分钟
+        # 注意：第i时刻的真实数据要在迭代之后才能用
+        # 记录当前的响应时间
+        if containerNum < 1:
+            containerNum = 1
+        res = getResponseTime(simu_real[i]/containerNum)
+        response.append(res)
+        conNum.append(containerNum)
+        containerNum = futureNum # 上一分钟的数据调度已经调度过来了
+        # 调度器，根据过去和现在数据预测下一分钟
+        if res > 250:
+            futureNum = containerNum + 1
+        elif res < 50:
+            futureNum = containerNum - 1
+    return np.array(response),np.array(conNum)
+
+
+#拿到两条时间序列，返回响应时间序列
+def simulation(data,predict):
+    response = []
+    conNum = []
+    simu_real = getLine(data/60)#将小时平均到分钟，并进行插值
+    simu_pred = getLine(predict/60)
+    containerNum = int(simu_real[0]/80)#初始容器数
+    futureNum = int(simu_real[0]/80)
+    for i in range(len(simu_real)):# 进行模拟，单位为分钟
+        # 注意：第i时刻的真实数据要在迭代之后才能用
+        # 记录当前的响应时间
+        if containerNum < 1:
+            containerNum = 1
+        res = getResponseTime(simu_real[i]/containerNum)
+        response.append(res)
+        conNum.append(containerNum)
+        containerNum = futureNum # 上一分钟的数据调度已经调度过来了
+        # 调度器，根据过去和现在数据预测下一分钟
+        if i == len(simu_real)-1:
+            break
+        else:
+            futureNum = getContainer(simu_real[:i+1],simu_pred[:i+2],res,containerNum)
+    return np.array(response),np.array(conNum)
+
+### 开始模拟
+s = time.time()
+total = 0
+p1 = []
+p2 = []
+p3 = []
+con1 = []
+con2 = []
+con3 = []
+#开始进行测试。测试的结果有两个，看集成预测结果与上界的逼近情况与下界的疏离情况。
+# 评判标准：SLA违约点数，以及平均消耗资源量。以最少的资源满足SLA为最优（SLA违约点最小）
+for i in range(len(formatted_dataset)):
+    #首先检查流量情况，如果流量平均小于100，没有必要
+    predictOne = predictResult[i] #集成预测结果
+    predictTwo = oppo[i]          #单独预测结果
+    data = formatted_dataset[i]   # 真实数据
+    realOne = data[int(ratio*len(data))+1:]
+    realOne = realOne.ravel()
+    if sum(realOne)/len(realOne) < 100:
+        continue
+    r1,c1 = simulation(realOne,predictOne)
+    r2,c2 = simulation(realOne,predictTwo)
+    r3,c3 = reactionSimu(realOne)
+    p1.append(sum(r1>250))
+    p2.append(sum(r2>250))
+    p3.append(sum(r3>250))
+    con1.append(sum(c1)/len(c1))
+    con2.append(sum(c2)/len(c2))
+    con3.append(sum(c3)/len(c3))
+
+plt.plot(p1,color='red')
+plt.plot(p2,color='black')
+plt.plot(p3,color='blue')
+plt.show()
+plt.plot(con1,color='red')
+plt.plot(con2,color='black')
+plt.plot(con3,color='blue')
+plt.show()
+e = time.time()
+print(e-s,'s')
+p1 = np.array(p1)
+p2 = np.array(p2)
+p3 = np.array(p3)
+con1 = np.array(con1)
+con2 = np.array(con2)
+con3 = np.array(con3)
+delta1 = p1-p2
+delta2 = p1-p3
+print(sum(delta1))
+print(sum(delta2))
+print(sum(np.array(p1)))
+print('违约情况比较：')
+print('集成预测自身总违约时间：',sum(p1))
+print('集成预测比单纯预测少的时间：',sum(delta1))
+print('集成预测比阈值法多的时间：',sum(delta2))
+print('集成预测：',sum(con1))
+print('单纯预测：',sum(con2))
+print('阈值法：',sum(con3))
