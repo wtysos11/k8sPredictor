@@ -245,7 +245,9 @@ import math
 def getTrendScore(x,y):
     v,p = spearmanr(x.ravel(),y.ravel())
     # 如果v<=0，或者p>=0.05，说明两者无线性关系，距离趋于近无穷大
-    if v<=0.1 or p>=0.05:
+    if math.isnan(v):
+        return pow(math.e,10)
+    elif v<=0.1 or p>=0.05:
         return pow(math.e,10)
     else:
         return pow(math.e,1/v)
@@ -276,25 +278,424 @@ paa_mid = paa_mid.reshape(paa_mid.shape[0],paa_mid.shape[1])
 baseData = paa.inverse_transform(paa_mid)#提取基线数据
 restData = originData - baseData # 计算得到残差数据
 
-# 模式提取
+# 模式提取（直接加和取平均后求rank-base处理，或者再做标准化进行SAX处理）
 # 初步想法：将每天24小时的流量重复叠加取平均，进行rank-base处理，然后跑MSE用Kmeans进行100聚类
+# 想法二：在自己
 # 对于100聚类中的每个聚类，再跑层次聚类进行细分，最小调到1。聚类结果衡量用类内最大相似度来进行衡量（有多不相近）
+# 使用SAX的dayPattern
+
+
+# 做法01：使用SAX提取前三天的残差信息，进行20聚类。对每个聚类内部跑complete，0.5的层次聚类。考虑到500量级要跑3分钟，平均大约是一个小时。
+from sklearn.cluster import AgglomerativeClustering
+import time
+
 dayPattern = []
 for index in range(restData.shape[0]):
-    cuData = restData[i].ravel()
+    cuData = restData[index].ravel()
     day = len(cuData)//24
     total = np.zeros(24)
-    for d in range(day):
+    for d in range(3):
         total += cuData[d*24:(d+1)*24]
     dayPattern.append(total/day)
 
-#################################################################
-# 第一次聚类使用Birch跑出初始，然后使用Kmeans细分。数据使用rank-base
-# 改进：直接使用原始数据，调整Birch的threshold
-from sklearn.cluster import AgglomerativeClustering
-data = restData
+dayPattern = np.array(dayPattern)
+scaler = TimeSeriesScalerMeanVariance(mu=0., std=1.)
+dayPattern = scaler.fit_transform(dayPattern)
+n_paa_segments = 24
+n_sax_symbols = 5
+sax = SymbolicAggregateApproximation(n_segments=n_paa_segments,
+                                     alphabet_size_avg=n_sax_symbols)
+dayPattern = sax.fit_transform(dayPattern)
+dayPattern = dayPattern.reshape(dayPattern.shape[0],dayPattern.shape[1])
+#进行聚类
+# 对SAX处理后的日变动进行50聚类
 s = time.time()
-model = AgglomerativeClustering(n_clusters=None, affinity=trend_affinity, linkage='average',distance_threshold = pow(math.e,1/0.5))
-y_pre = model.fit_predict(data)
-e = time.time()
+y_pre = KMeans(n_clusters=20).fit_predict(dayPattern)
+clusNum = np.zeros(len(y_pre))
+totalClus = 0
+for k in range(max(y_pre)+1):
+    data = restData[y_pre==k]
+    data = data.reshape(data.shape[0],data.shape[1])
+    distance_matrix = trend_affinity(data)
+    model = AgglomerativeClustering(n_clusters=None, affinity='precomputed', linkage='complete',distance_threshold = pow(math.e,1/0.5))
+    second_pre = model.fit_predict(distance_matrix)
+    #对于所有在该类别中的元素，进行加和
+    second_iter = np.where(y_pre==k)[0]
+    for index,ele in enumerate(second_iter):
+        clusNum[ele] = second_pre[index]+totalClus
+    totalClus += max(second_pre)+1
 
+e = time.time()
+print(e-s,'s')
+## 后面的部分必须要去除基线数据。或者说，必须要以残差为基础进行聚类中心选取和预测
+# 通过残差聚类得到中心
+# 对残差滚动时间序列窗口得到预测结果
+# 将预测结果加上最后的基线数据进行逆归一化
+# 得到最终结果，指导变化
+# 整合部分
+totalClusterNum = totalClus
+secondClusans = clusNum
+# 第三步：整体预测。提取出聚类中心并对其进行预测，将结果作为聚类中所有值的最终结果
+store = []
+for k in range(totalClusterNum):
+    stdClusData = restData[secondClusans == k]
+    store.append(sum(stdClusData)/stdClusData.shape[0])
+
+#################################################################
+# 第四步：预测。
+# 通过对过去432的点，预测未来后面的1个点+47个点
+from sklearn.svm import SVR
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import mean_squared_error
+# 返回滑动窗口
+def getWindow(data,window_size):
+    x = []
+    for t in range(len(data)-window_size+1):
+        a = data[t:t+window_size]
+        x.append(a)
+    x = np.array(x)
+    x = np.reshape(x,(len(x),window_size))
+    return x
+
+# 用于GridSearchCV调参的
+def print_best_score(gsearch,param_test):
+     # 输出best score
+    print("Best score: %0.3f" % gsearch.best_score_)
+    print("Best parameters set:")
+    # 输出最佳的分类器到底使用了怎样的参数
+    best_parameters = gsearch.best_estimator_.get_params()
+    for param_name in sorted(param_test.keys()):
+        print("\t%s: %r" % (param_name, best_parameters[param_name]))
+
+
+# 离线检验
+# 使用方法：决策树集成回归 + 时间窗口法
+# 预测结果，给出预测数据，预测步数，得到预测结果,全部结果
+def getPredictResultWithSlidingWindows(data):
+    ratio = 0.9 #测试数据为10%
+    window_size = 7
+    X_train = getWindow(data[:int(len(data)*ratio)],window_size)
+    y_train = data[window_size:int(len(data)*ratio)+1]
+    #param_test = {"C": [1e0, 1e1, 1e2, 1e3], "gamma": np.logspace(-2, 2, 5)}
+    #svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,param_grid=param_test)
+    #svr.fit(X_train,y_train.ravel())
+    #print_best_score(svr,param_test)
+    svr = SVR(kernel='rbf',gamma='scale')
+    svr.fit(X_train,y_train.ravel())
+
+    X_test = getWindow(data[int(len(data)*ratio)+1 - window_size:-1],window_size)
+    y_test = data[int(len(data)*ratio)+1:]
+    y_prediction = svr.predict(X_test)
+    return y_test,y_prediction
+# data为一维向量
+def futurePredict(data):
+    ratio = 0.9 #测试数据为10%
+    window_size = 7
+    X_train = getWindow(data[:-1],window_size)
+    y_train = data[window_size:]
+    #param_test = {"C": [1e0, 1e1, 1e2, 1e3], "gamma": np.logspace(-2, 2, 5)}
+    #svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,param_grid=param_test)
+    #svr.fit(X_train,y_train.ravel())
+    #print_best_score(svr,param_test)
+    svr = SVR(kernel='rbf',gamma='scale')
+    svr.fit(X_train,y_train.ravel())
+    # 后面使用叠加法反复叠加出来，需要仔细调试
+    y_prediction = np.zeros(48)
+    window = np.zeros(window_size)
+    # 从最后的window_size个元素中装填预测窗口
+    for i in range(window_size):
+        window[i] = data[-1*(window_size-i)]
+
+    for i in range(len(y_prediction)):
+        p = window.reshape(1,window_size)
+        y_prediction[i] = svr.predict(p)[0]
+        window = np.roll(window,-1)#选择往左移动一步
+        window[window_size-1] = y_prediction[i]
+    return y_prediction[1:]
+
+s = time.time()
+window_size = 7
+for i in range(len(store)):
+    y_prediction = futurePredict(store[i])#这里输入为432个点，输出为47个点
+    store[i] = y_prediction
+e = time.time()
+print('predict time:',e-s,'s')
+
+#################################################################
+# 第五步：回归。将预测数据倒回原始数据进行回归
+
+# 将数据与原始数据进行对比，同时完成归一化
+
+from sklearn.metrics import mean_squared_error
+score = 0
+ratioScore = 0
+
+predictResult = []
+for k in range(len(formatted_dataset)):
+    label = secondClusans[k]
+    repres = store[int(label)] + baseData[k,-1][0]#残差数据+最后的基线数据
+    m = repres * np.sqrt(np.var(originStdData[k])) + np.mean(originStdData[k])
+    predictAns = m * np.sqrt(np.var(formatted_dataset[k])) + np.mean(formatted_dataset[k])
+    predictResult.append(predictAns)
+    data = formatted_dataset[k]
+    mse = mean_squared_error(data[int(ratio*len(data))+1:],predictAns)
+    score += mse
+    ratioScore += mse/np.mean(formatted_dataset[k])
+print(score/len(formatted_dataset))
+print(ratioScore/len(formatted_dataset))
+
+# 对照组：对原始时间序列直接进行预测，两者的差距
+oppo = []
+score = 0
+ratioScore = 0
+
+s = time.time()
+window_size = 7
+for i in range(len(formatted_dataset)):
+    y_test,y_prediction = getPredictResultWithSlidingWindows(formatted_dataset[i])
+    oppo.append(y_prediction)
+    data = formatted_dataset[i]
+    mse = mean_squared_error(data[int(ratio*len(data))+1:],predictAns)
+    score += mse
+    ratioScore += mse/np.mean(formatted_dataset[i])
+e = time.time()
+print('predict time:',e-s,'s')
+print(score/len(formatted_dataset))
+print(ratioScore/len(formatted_dataset))
+
+# 最后的模拟器
+######################################################
+# 模拟。对于每一个测试数据，构造预测器，并且模拟预测数据
+# 模拟器：读入真实数据与预测数据，并进行线性插值，单位为分钟。容器从拉起到分配流量时间定为1分钟，调度器以分钟为单位进行调度。
+
+# 主程序：模拟器。
+# 输入：两端时间序列（真实值与预测值），长度为48个点，每个点一个小时
+# 输出：模拟的响应时间序列
+# 假设：存在一个理想的负载平衡器，能够平均将所有流量分配给每一个容器，且最大平均流量不超过150req/s（超过的则拒绝服务）
+# 1. 容器从进行调度到负载流量需要1分钟。
+# 2. 每分钟进行一次调度判断操作
+
+# 辅助程序：调度器
+# 根据预测数据判断是否进行调度：首先看预测数据与实际数据的差值，如果差值足够小，则按照预测器数据进行。如果差值过大，则将预测器的变动作为参考（拐点预测器），以阈值法进行调度。如果拐点预测继续失败，则回归原始预测器
+# 需要注意：流量只可能是整数，需要进行取整操作
+
+#本步骤的结果会反过来影响前面的结论，请慎重进行
+
+
+
+# 得到线性插值结果，每个点插60个值。2个点61,3个点121
+def getLine(line):
+    result = np.zeros((len(line)-1)*60+1)
+    for i in range(len(line)):
+        if i==0:
+            result[0] = line[0]
+        else:
+            result[i*60] = line[i]
+            #进行插值
+            delta = (line[i]-line[i-1])/60
+            for j in range(59): #对中间的59个点进行插值处理
+                result[(i-1)*60+j+1] = result[(i-1)*60]+delta * (j+1)
+    return result
+
+# 根据流量得到响应时间的函数
+def getResponseTime(traffic):
+    traffic = int(traffic)
+    data = [0,10,29,42,62,85,140,168,209,250,269,283,329,378,390,467,579]
+    if traffic > 150:
+        return 1500
+    else:
+        if traffic % 10 ==0:
+            return data[traffic//10]
+        else:
+            num = traffic//10
+            delta = (data[num+1]-data[num])/10
+            d = traffic - num*10
+            return data[num] + d*delta
+
+# 预测算法，关键是预测趋势和拐点。
+# 取得趋势
+def getTrend(data):
+    if data[2]>data[1] and data[1]>data[0]:
+        return 1
+    elif data[2]<data[1] and data[1]<data[0]:
+        return -1
+    return 0
+
+# 根据过去和现在的真实数据和预测数据预测下一分钟的容器数量
+# real的为之前的观测值，pred为之前的预测值加上当前的预测值
+def getContainer(real,pred,responseTime,containerNum):
+    # 如果当前的预测值与真实值很接近，则直接按照预测值预测
+    # 如果当前的预测值与真实值不接近，但是斜率接近，则按照预测值预测斜率
+    # 如果都不接近，则转为阈值法调度器，直接按照响应时间预测。对于超过200的响应时间直接+1
+    delta = 80
+    if abs(real[-1]-pred[-2])<delta:#如果在范围以内。可能性很小，适用于拟合的比较好的情况（比如单个的预测）
+        p = pred[-1]//80
+        if p < 1:
+            p = 1
+        return p
+    
+    # 后续，提取趋势进行预测
+    # 如何进行趋势判断，我认为还是要取斜率。
+    # 如果三点同趋势，
+        # 趋势与真实数据趋势相同：将三点斜率转成角度取加权平均后再转成斜率进行预测
+    if len(real)>=3:
+        s1 = getTrend(real[-3:])
+        s2 = getTrend(pred[-4:-1])
+        if s1 == s2:# 趋势相同
+            realDelta = 0.66*abs(real[-1]-real[-2]) + 0.33*abs(real[-2]-real[-3])
+            predDelta = 0.66*abs(pred[-2]-pred[-3]) + 0.33*abs(pred[-3]-pred[-4])
+            if abs(predDelta-realDelta)/realDelta < 0.5: #误差在一定范围以内，直接预测
+                if abs(s1)>0:#不是拐点，则依据前面的值加权处理
+                    futureTraffic = real[-1]+0.5*(pred[-1]-pred[-2])+0.5*(pred[-2]-pred[-3])
+                    p = futureTraffic//80
+                    if p<1:
+                        p=1
+                    return p
+                else: #如果是拐点，则按照拐点进行预测。不直接枚举预测下降是为了避免预测错误
+                    futureTraffic = real[-1]+(pred[-1]-pred[-2])
+                    p = futureTraffic//80
+                    if p<1:
+                        p=1
+                    return p
+                    
+    # 阈值法只根据当前是否超时/过低来判断是否需要增减
+    if responseTime > 250:
+        containerNum += 1
+    elif responseTime < 100:
+        containerNum -= 1
+    if containerNum < 1:
+        containerNum = 1
+    return containerNum
+
+#判断预测器是否进行了预测
+def isGetPrediction(real,pred):
+    # 如果当前的预测值与真实值很接近，则直接按照预测值预测
+    # 如果当前的预测值与真实值不接近，但是斜率接近，则按照预测值预测斜率
+    # 如果都不接近，则转为阈值法调度器，直接按照响应时间预测。对于超过200的响应时间直接+1
+    delta = 80
+    if abs(real[-1]-pred[-2])<delta:#如果在范围以内。可能性很小，适用于拟合的比较好的情况（比如单个的预测）
+        p = pred[-1]//80
+        if p < 1:
+            p = 1
+        return True
+    
+    # 后续，提取趋势进行预测
+    # 如何进行趋势判断，我认为还是要取斜率。
+    # 如果三点同趋势，
+        # 趋势与真实数据趋势相同：将三点斜率转成角度取加权平均后再转成斜率进行预测
+    if len(real)>=3:
+        s1 = getTrend(real[-3:])
+        s2 = getTrend(pred[-4:-1])
+        if s1 == s2:# 趋势相同
+            realDelta = 0.66*abs(real[-1]-real[-2]) + 0.33*abs(real[-2]-real[-3])
+            predDelta = 0.66*abs(pred[-2]-pred[-3]) + 0.33*abs(pred[-3]-pred[-4])
+            if abs(predDelta-realDelta)/realDelta < 0.5: #误差在一定范围以内，直接预测
+                return True
+    return False
+                    
+#根据所给的数据，返回单纯使用响应式调度所得到的时间
+def reactionSimu(data):
+    response = []
+    conNum = []
+    simu_real = getLine(data/60)#将小时平均到分钟，并进行插值
+    containerNum = int(simu_real[0]/80)#初始容器数
+    futureNum = int(simu_real[0]/80)
+    for i in range(len(simu_real)):# 进行模拟，单位为分钟
+        # 注意：第i时刻的真实数据要在迭代之后才能用
+        # 记录当前的响应时间
+        if containerNum < 1:
+            containerNum = 1
+        res = getResponseTime(simu_real[i]/containerNum)
+        response.append(res)
+        conNum.append(containerNum)
+        containerNum = futureNum # 上一分钟的数据调度已经调度过来了
+        # 调度器，根据过去和现在数据预测下一分钟
+        if res > 250:
+            futureNum = containerNum + 1
+        elif res < 50:
+            futureNum = containerNum - 1
+    return np.array(response),np.array(conNum)
+
+
+#拿到两条时间序列，返回响应时间序列
+def simulation(data,predict):
+    response = []
+    conNum = []
+    simu_real = getLine(data/60)#将小时平均到分钟，并进行插值
+    simu_pred = getLine(predict/60)
+    containerNum = int(simu_real[0]/80)#初始容器数
+    futureNum = int(simu_real[0]/80)
+    for i in range(len(simu_real)):# 进行模拟，单位为分钟
+        # 注意：第i时刻的真实数据要在迭代之后才能用
+        # 记录当前的响应时间
+        if containerNum < 1:
+            containerNum = 1
+        res = getResponseTime(simu_real[i]/containerNum)
+        response.append(res)
+        conNum.append(containerNum)
+        containerNum = futureNum # 上一分钟的数据调度已经调度过来了
+        # 调度器，根据过去和现在数据预测下一分钟
+        if i == len(simu_real)-1:
+            break
+        else:
+            futureNum = getContainer(simu_real[:i+1],simu_pred[:i+2],res,containerNum)
+    return np.array(response),np.array(conNum)
+
+### 开始模拟
+s = time.time()
+total = 0
+p1 = []
+p2 = []
+p3 = []
+con1 = []
+con2 = []
+con3 = []
+#开始进行测试。测试的结果有两个，看集成预测结果与上界的逼近情况与下界的疏离情况。
+# 评判标准：SLA违约点数，以及平均消耗资源量。以最少的资源满足SLA为最优（SLA违约点最小）
+for i in range(len(formatted_dataset)):
+    #首先检查流量情况，如果流量平均小于100，没有必要
+    predictOne = predictResult[i] #集成预测结果
+    predictTwo = oppo[i]          #单独预测结果
+    data = formatted_dataset[i]   # 真实数据
+    realOne = data[int(ratio*len(data))+1:]
+    realOne = realOne.ravel()
+    if sum(realOne)/len(realOne) < 100:
+        continue
+    r1,c1 = simulation(realOne,predictOne)
+    r2,c2 = simulation(realOne,predictTwo)
+    r3,c3 = reactionSimu(realOne)
+    p1.append(sum(r1>250))
+    p2.append(sum(r2>250))
+    p3.append(sum(r3>250))
+    con1.append(sum(c1)/len(c1))
+    con2.append(sum(c2)/len(c2))
+    con3.append(sum(c3)/len(c3))
+
+plt.plot(p1,color='red')
+plt.plot(p2,color='black')
+plt.plot(p3,color='blue')
+plt.show()
+plt.plot(con1,color='red')
+plt.plot(con2,color='black')
+plt.plot(con3,color='blue')
+plt.show()
+e = time.time()
+print(e-s,'s')
+p1 = np.array(p1)
+p2 = np.array(p2)
+p3 = np.array(p3)
+con1 = np.array(con1)
+con2 = np.array(con2)
+con3 = np.array(con3)
+delta1 = p1-p2
+delta2 = p1-p3
+print(sum(delta1))
+print(sum(delta2))
+print(sum(np.array(p1)))
+print('违约情况比较：')
+print('集成预测自身总违约时间：',sum(p1))
+print('集成预测比单纯预测少的时间：',sum(delta1))
+print('集成预测比阈值法多的时间：',sum(delta2))
+print('集成预测：',sum(con1))
+print('单纯预测：',sum(con2))
+print('阈值法：',sum(con3))
