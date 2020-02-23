@@ -162,6 +162,8 @@ def getCenter(originData,y_pre,clusNum):
 
 # 衡量两个给定时间序列之间的欧式距离（默认其等长）
 def getDist(vec1,vec2):
+    vec1 = vec1.ravel()
+    vec2 = vec2.ravel()
     return np.linalg.norm(vec1 - vec2)
 
 # 给定一个聚类以及一个范围，得到这个聚类的分数。分数越小聚类效果越好
