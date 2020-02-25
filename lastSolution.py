@@ -390,11 +390,17 @@ def print_best_score(gsearch,param_test):
         print("\t%s: %r" % (param_name, best_parameters[param_name]))
 
 
+from sklearn.preprocessing import StandardScaler
 # 离线检验
 # 使用方法：决策树集成回归 + 时间窗口法
 # 预测结果，给出预测数据，预测步数，得到预测结果,全部结果
 # data为一维向量
+# 为了保证正常运行，需要先对数据进行归一化处理，然后再返回
 def getPredictResultWithSlidingWindows(data):
+    data = data.ravel().reshape(-1,1)
+    scaler = StandardScaler()
+    data = scaler.fit_transform(data)
+    # 上面完成归一化
     ratio = 0.9 #测试数据为10%
     window_size = 7
     X_train = getWindow(data[:int(len(data)*ratio)],window_size)
@@ -409,6 +415,8 @@ def getPredictResultWithSlidingWindows(data):
     X_test = getWindow(data[int(len(data)*ratio)+1 - window_size:-1],window_size)
     y_test = data[int(len(data)*ratio)+1:]
     y_prediction = svr.predict(X_test)
+    y_test = scaler.inverse_transform(y_test)
+    y_prediction = scaler.inverse_transform(y_prediction)
     return y_test,y_prediction
 
 s = time.time()
@@ -453,7 +461,7 @@ for i in range(len(formatted_dataset)):
     y_test,y_prediction = getPredictResultWithSlidingWindows(formatted_dataset[i])
     oppo.append(y_prediction)
     data = formatted_dataset[i]
-    mse = mean_squared_error(data[int(ratio*len(data))+1:],predictAns)
+    mse = mean_squared_error(data[int(ratio*len(data))+1:],y_prediction)
     score += mse
     ratioScore += mse/np.mean(formatted_dataset[i])
 e = time.time()
@@ -520,7 +528,18 @@ def getTrend(data):
 
 # 根据过去和现在的真实数据和预测数据预测下一分钟的容器数量
 # real的为之前的观测值，pred为之前的预测值加上当前的预测值
-def getContainer(real,pred,responseTime,containerNum):
+def getContainerPast(real,pred,responseTime,containerNum):
+    #如果预测的流量过小，直接转为阈值法
+    # 如果预测的流量不足三个容器，直接忽视
+    if real[-1]<300:
+        if responseTime > 250:
+            containerNum += 1
+        elif responseTime < 50:
+            containerNum -= 1
+        if containerNum < 1:
+            containerNum = 1
+        return containerNum
+
     # 如果当前的预测值与真实值很接近，则直接按照预测值预测
     # 如果当前的预测值与真实值不接近，但是斜率接近，则按照预测值预测斜率
     # 如果都不接近，则转为阈值法调度器，直接按照响应时间预测。对于超过200的响应时间直接+1
@@ -558,7 +577,53 @@ def getContainer(real,pred,responseTime,containerNum):
     # 阈值法只根据当前是否超时/过低来判断是否需要增减
     if responseTime > 250:
         containerNum += 1
-    elif responseTime < 100:
+    elif responseTime < 50:
+        containerNum -= 1
+    if containerNum < 1:
+        containerNum = 1
+    return containerNum
+
+def getContainer(real,pred,responseTime,containerNum):
+    # 如果当前的预测值与真实值很接近，则直接按照预测值预测
+    # 如果当前的预测值与真实值不接近，但是斜率接近，则按照预测值预测斜率
+    # 如果都不接近，则转为阈值法调度器，直接按照响应时间预测。对于超过200的响应时间直接+1
+    delta = 80
+    if abs(real[-1]-pred[-2])<delta:#如果在范围以内。可能性很小，适用于拟合的比较好的情况（比如单个的预测）
+        p = pred[-1]//80
+        if p < 1:
+            p = 1
+        return p
+    
+    # 趋势预测：
+    # 首先判断趋势是否相同，要求至少0.8，p<0.05
+    # 然后根据过去的趋势区别线性对照自身的趋势区别
+        #三种可能：完全相同，直接过
+        # 前面有问题，没影响
+        # 后面有问题，趋势预测失败，需要跳过。需要进行跳过(近距离spearman为-1)
+    if len(real)>=3:
+        s1 = getTrend(real[-3:])
+        s2 = getTrend(pred[-4:-1])
+        if s1 == s2:# 趋势相同
+            realDelta = 0.66*abs(real[-1]-real[-2]) + 0.33*abs(real[-2]-real[-3])
+            predDelta = 0.66*abs(pred[-2]-pred[-3]) + 0.33*abs(pred[-3]-pred[-4])
+            if abs(predDelta-realDelta)/realDelta < 0.5: #误差在一定范围以内，直接预测
+                if abs(s1)>0:#不是拐点，则依据前面的值加权处理
+                    futureTraffic = real[-1]+0.5*(pred[-1]-pred[-2])+0.5*(pred[-2]-pred[-3])
+                    p = futureTraffic//80
+                    if p<1:
+                        p=1
+                    return p
+                else: #如果是拐点，则按照拐点进行预测。不直接枚举预测下降是为了避免预测错误
+                    futureTraffic = real[-1]+(pred[-1]-pred[-2])
+                    p = futureTraffic//80
+                    if p<1:
+                        p=1
+                    return p
+                    
+    # 阈值法只根据当前是否超时/过低来判断是否需要增减
+    if responseTime > 250:
+        containerNum += 1
+    elif responseTime < 50:
         containerNum -= 1
     if containerNum < 1:
         containerNum = 1
@@ -657,16 +722,22 @@ for i in range(len(formatted_dataset)):
     realOne = data[int(ratio*len(data))+1:]
     realOne = realOne.ravel()
     if sum(realOne)/len(realOne) < 100:
-        continue
-    r1,c1 = simulation(realOne,predictOne)
-    r2,c2 = simulation(realOne,predictTwo)
-    r3,c3 = reactionSimu(realOne)
-    p1.append(sum(r1>250))
-    p2.append(sum(r2>250))
-    p3.append(sum(r3>250))
-    con1.append(sum(c1)/len(c1))
-    con2.append(sum(c2)/len(c2))
-    con3.append(sum(c3)/len(c3))
+        p1.append(0)
+        p2.append(0)
+        p3.append(0)
+        con1.append(1)
+        con2.append(1)
+        con3.append(1)
+    else:
+        r1,c1 = simulation(realOne,predictOne)
+        r2,c2 = simulation(realOne,predictTwo)
+        r3,c3 = reactionSimu(realOne)
+        p1.append(sum(r1>250))
+        p2.append(sum(r2>250))
+        p3.append(sum(r3>250))
+        con1.append(sum(c1)/len(c1))
+        con2.append(sum(c2)/len(c2))
+        con3.append(sum(c3)/len(c3))
 
 plt.plot(p1,color='red')
 plt.plot(p2,color='black')
