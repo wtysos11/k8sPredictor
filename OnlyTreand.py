@@ -4,6 +4,11 @@
 
 # 问题：如何判断趋势是否正确？一阶差分！
 
+# 具体的实现：根据残差数据进行聚类
+# 直接进行预测
+# 下一阶段目标：查看不使用滑动窗口法对预测结果的影响有多大
+# 对同一段残差流量，一个使用滑动窗口法，一个不使用滑动窗口法，比较
+
 # Birch论文 A BIRCH-Based Clustering Method for Large Time Series Databases
 # 固定读取部分
 import os
@@ -699,3 +704,75 @@ print('集成预测比阈值法多的时间：',sum(delta2))
 print('集成预测：',sum(con1))
 print('单纯预测：',sum(con2))
 print('阈值法：',sum(con3))
+
+# 实验滑动窗口的影响
+# 用来训练的部分数据
+paa_origin = paa.inverse_transform(paa_mid)
+paa_rest = stdData[:,:int(ratio*stdData.shape[1])]-paa_origin
+
+def futurePredict(data):
+    ratio = 0.9 #测试数据为10%
+    window_size = 7
+    X_train = getWindow(data[:-1],window_size)
+    y_train = data[window_size:]
+    #param_test = {"C": [1e0, 1e1, 1e2, 1e3], "gamma": np.logspace(-2, 2, 5)}
+    #svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,param_grid=param_test)
+    #svr.fit(X_train,y_train.ravel())
+    #print_best_score(svr,param_test)
+    svr = SVR(kernel='rbf',gamma='scale')
+    svr.fit(X_train,y_train.ravel())
+    # 后面使用叠加法反复叠加出来，需要仔细调试
+    y_prediction = np.zeros(48)
+    window = np.zeros(window_size)
+    # 从最后的window_size个元素中装填预测窗口
+    for i in range(window_size):
+        window[i] = data[-1*(window_size-i)]
+
+    for i in range(len(y_prediction)):
+        p = window.reshape(1,window_size)
+        y_prediction[i] = svr.predict(p)[0]
+        window = np.roll(window,-1)#选择往左移动一步
+        window[window_size-1] = y_prediction[i]
+    return y_prediction[1:]
+
+# 改进：
+# 导入真实数据
+# 将真实数据减去第一天作为残差的输入
+# 使用滑动窗口法
+# 注：data导入的是全体流量。
+def getPredictResultWithSlidingWindows(data):
+    data = data.ravel().reshape(-1,1)
+    scaler = StandardScaler()
+    data = scaler.fit_transform(data)
+    # 上面完成归一化
+    ratio = 0.9 #测试数据为10%
+    window_size = 7
+    X_train = getWindow(data[:int(len(data)*ratio)],window_size)
+    y_train = data[window_size:int(len(data)*ratio)+1]
+    #param_test = {"C": [1e0, 1e1, 1e2, 1e3], "gamma": np.logspace(-2, 2, 5)}
+    #svr = GridSearchCV(SVR(kernel='rbf', gamma=0.1), cv=5,param_grid=param_test)
+    #svr.fit(X_train,y_train.ravel())
+    #print_best_score(svr,param_test)
+    svr = SVR(kernel='rbf',gamma='scale')
+    svr.fit(X_train,y_train.ravel())
+
+    X_test = getWindow(data[int(len(data)*ratio)+1 - window_size:-1],window_size)
+    y_test = data[int(len(data)*ratio)+1:]
+    y_prediction = svr.predict(X_test)
+    y_test = scaler.inverse_transform(y_test)
+    y_prediction = scaler.inverse_transform(y_prediction)
+    return y_test,y_prediction
+
+# 将残余数据的聚类中心放入store中
+store = []
+for k in range(totalClusterNum):
+    # 残余数据进行集中聚类
+    # 由两个部分组成，已知部分由计算出来的残余数据组成，未知部分由实际数据减去第一个点组成
+    calc = np.zeros(len(stdData[k]))
+    for i in range(int(ratio*stdData.shape[1])):
+        calc[i] = paa_rest[k,i,0]
+    for i in range(int(ratio*stdData.shape[1]),len(stdData[k])):
+        calc[i] = stdData[k,i] - paa_mid[k,-1]
+    store.append(calc)
+    # 
+    
