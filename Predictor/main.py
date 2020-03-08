@@ -33,7 +33,7 @@ def getConNumFromDict(futureTraffic,trafficDict,delta = 10):
 #阈值法调度策略：如果响应时间超过100，则增加。反之如果响应时间小于60则减少
 def reactiveScheduler(rspTime,containerNum):
     upThre = 60
-    downThre = 30
+    downThre = 35
     if rspTime>upThre:
         containerNum += 1
     elif rspTime<downThre:
@@ -50,7 +50,7 @@ def reactiveScheduler(rspTime,containerNum):
 def getContainerFromTraffic(real,pred,responseTime,containerNum,cnList):
     trafficThreshold = {2:150,3:240,4:330,5:410,6:480}
     upThre = 60
-    downThre = 30
+    downThre = 35
     #如果预测的流量过小，直接转为阈值法
     if len(real)<2: #开始几个点保持不变
         return containerNum
@@ -91,6 +91,9 @@ def getContainerFromTraffic(real,pred,responseTime,containerNum,cnList):
                 print('far more smaller than real',p)
                 p = containerNum - 1
                 return p
+            elif responseTime < downThre:
+                p = containerNum - 1
+                return p 
             else:
                 return containerNum
 
@@ -186,7 +189,7 @@ if __name__=="__main__":
     pred = readTrafficFromFile() #应该有48个点，第一个点为真实流量，后面的为预测值
     changeContainerNum(5)
     
-    start_time = "2020-03-08 11:23:00"
+    start_time = "2020-03-08 12:35:00"
     start = datetime.datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
     isOk = False
     while not isOk:
@@ -200,6 +203,8 @@ if __name__=="__main__":
     time.sleep(5) #先延迟5s，避免开场触发调度
 
     i=0#迭代开始
+    #计划将调度时间扩展为2分钟。
+    
     print('enter')
     #提前调度容器数量为7
     cnList = []

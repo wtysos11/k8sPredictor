@@ -37,15 +37,15 @@ def fetch_data(api_str, start_time, latsted_time, filename):
             print("0", file=pout)
     pout.close()
 
-start_time = "2020-02-19 10:30:00"
+start_time = "2020-03-08 12:35:00"
 lasted_time = 2880
 
 fetch_data(throughput_api, start_time, lasted_time, "throughput.log")
 fetch_data(responseTime_api, start_time, lasted_time, "responseTime.log")
 fetch_data(supplyPod_api, start_time, lasted_time, "supplyPod.log")
-fetch_data(cpuAvailability_api, start_time, lasted_time, "cpuAvailability.log")
+#fetch_data(cpuAvailability_api, start_time, lasted_time, "cpuAvailability.log")
 #fetch_data(demandPod_api, start_time, lasted_time, "demandPod6.log")
-fetch_data(requestSuccessTotal_api, start_time, lasted_time, "requestSuccessTotal.log")
-fetch_data(requestFailTotal_api, start_time, lasted_time, "requestFailTotal.log")
-fetch_data(serviceTimeFailTotal_api, start_time, lasted_time, "serviceTimeFailTotal.log")
-fetch_data(serviceTimeAvaliableTotal_api, start_time, lasted_time, "serviceTimeAvaliableTotal.log")
+#fetch_data(requestSuccessTotal_api, start_time, lasted_time, "requestSuccessTotal.log")
+#fetch_data(requestFailTotal_api, start_time, lasted_time, "requestFailTotal.log")
+#fetch_data(serviceTimeFailTotal_api, start_time, lasted_time, "serviceTimeFailTotal.log")
+#fetch_data(serviceTimeAvaliableTotal_api, start_time, lasted_time, "serviceTimeAvaliableTotal.log")

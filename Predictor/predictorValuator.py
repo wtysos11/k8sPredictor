@@ -270,6 +270,9 @@ def getLSTMResult(data,window_size):
         auxiliary_input_list = np.array(auxiliary_input_list)
         y_train = np.array(y_train)
         model = getLSTMModel(main_input_list,auxiliary_input_list,y_train,epch,window_size)
+        del main_input_list
+        del auxiliary_input_list
+        del y_train
 
         #生成测试数据  
         #对未来的47个点，生成对应的预测值
@@ -290,6 +293,8 @@ def getLSTMResult(data,window_size):
         y_test = model.predict({'main_input':test_input,'aux_input':aux_input})
         store.append(y_test)
         del model
+        del test_input
+        del aux_input
     e = time.time()
     print('lstm predict time:',e-s,'s')
     return store
@@ -303,7 +308,7 @@ def getLSTMResult(data,window_size):
 
 if __name__=="__main__":
     cache = DataOperator()
-    window_size = [4,8,10,24]
+    window_size = [4,8]
     l = []
     # 问题：LSTM可能与投入的数据量有关系
     for e in window_size:
