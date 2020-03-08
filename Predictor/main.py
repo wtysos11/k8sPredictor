@@ -33,7 +33,7 @@ def getConNumFromDict(futureTraffic,trafficDict,delta = 10):
 #阈值法调度策略：如果响应时间超过100，则增加。反之如果响应时间小于60则减少
 def reactiveScheduler(rspTime,containerNum):
     upThre = 60
-    downThre = 40
+    downThre = 30
     if rspTime>upThre:
         containerNum += 1
     elif rspTime<downThre:
@@ -70,6 +70,7 @@ def getContainerFromTraffic(real,pred,responseTime,containerNum,cnList):
     # 如果都不接近，则转为阈值法调度器，直接按照响应时间预测。对于超过200的响应时间直接+1
     AggresiveDelta = 50
     ConserveDelta = 30
+    tinyDelta = 20
     if len(pred)>=2:
         p = getConNumFromDict(pred[-1],trafficThreshold)
         if p < 2:
@@ -82,8 +83,12 @@ def getContainerFromTraffic(real,pred,responseTime,containerNum,cnList):
             #减少容器数必须要数次预测正确才能够进行
             print('2:预测准确，保守减少，直接使用预测')
             # 如果当前p值需要减少
-            if (p < containerNum and real[-1]<real[-2] and real[-2]<real[-3] and abs(real[-2]-pred[-3])<ConserveDelta) or rspTime < downThre:
+            if p < containerNum and real[-1]<real[-2] + tinyDelta and real[-2] < real[-3] + tinyDelta and abs(real[-2]-pred[-3])<ConserveDelta:
                 #检验之前需要持续下降，且两个点都预测准确，
+                p = containerNum - 1
+                return p
+            elif p < containerNum - 1:#对于严重小于真实情况的时候进行适量的调整
+                print('far more smaller than real',p)
                 p = containerNum - 1
                 return p
             else:
@@ -181,7 +186,7 @@ if __name__=="__main__":
     pred = readTrafficFromFile() #应该有48个点，第一个点为真实流量，后面的为预测值
     changeContainerNum(5)
     
-    start_time = "2020-03-08 09:55:00"
+    start_time = "2020-03-08 11:23:00"
     start = datetime.datetime.strptime(start_time, '%Y-%m-%d %H:%M:%S')
     isOk = False
     while not isOk:
@@ -214,6 +219,10 @@ if __name__=="__main__":
             conNum = getContainerNum()
             cnList.append(conNum)
             containerNum = getContainerFromTraffic(real[:i],pred[:i+1],rspTime,conNum,cnList)
+            if containerNum < 2:
+                containerNum = 2
+            elif containerNum >7:
+                containerNum = 7
             #containerNum = reactiveScheduler(rspTime,conNum)
             changeContainerNum(containerNum)
             print('schedule',i,' change:',containerNum-conNum,'rspTime:',rspTime,'conNum',containerNum)
