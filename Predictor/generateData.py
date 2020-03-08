@@ -1,5 +1,7 @@
 # Birch论文 A BIRCH-Based Clustering Method for Large Time Series Databases
 # 固定读取部分
+import time
+foreignTime = time.time()
 import os
 fileName = 'result.txt'
 dataPath = "E:\\code\\myPaper\\k8sPredictor"
@@ -81,8 +83,8 @@ stdData = scaler.fit_transform(formatted_dataset)
 
 # 为原有的均值设定为指定的方差和平均值（可能因为极端值的问题有些差别）
 # 将原始数据进行放缩，在原数据的基础上生成新的统一平均值数据
-DistAvg = 400
-VarAvg = 500
+DistAvg = 300
+VarAvg = 5000
 for i in range(len(formatted_dataset)):
     repres = stdData[i]
     formatted_dataset[i] = repres * np.sqrt(VarAvg) + DistAvg
@@ -538,7 +540,27 @@ def getLSTMResult(data,epch=15):
     print('lstm predict time:',e-s,'s')
     return st
 
-index = 5926 #用于测试的数据编号。候补，
+
+'''
+#选择用函数
+for i in range(9900):
+    if max(formatted_dataset[i,int(ratio*len(data))+1:]) < 520 and max(formatted_dataset[i,int(ratio*len(data))+1:]) - min(formatted_dataset[i,int(ratio*len(data))+1:]) > 300:
+        print(i)
+        plt.plot(formatted_dataset[i,int(ratio*len(data))+1:],color='red',label="real")
+        plt.plot(oppo[i],color='green',label="solo")
+        plt.plot(predictResult[i],color='blue',label="clus")
+        plt.legend(loc='upper right')
+        plt.show()
+        print('单独误差：',mean_squared_error(formatted_dataset[i,int(ratio*len(data))+1:],oppo[i]))
+        print('集成误差：',mean_squared_error(formatted_dataset[i,int(ratio*len(data))+1:],predictResult[i]))
+
+'''
+# 表现较好的：90/4931
+# 可能较好：2053，7332
+# 单独预测表现更好：1423，5184
+# 集成预测表现更好：1024，5104
+# 都不好：1289，2489争取不被压爆
+index = 4931 #用于测试的数据编号。候补，
 k = index
 label = int(secondClusans[k])
 #y_test,y_prediction = getPredictResultWithSlidingWindows(store[index])
@@ -557,7 +579,7 @@ y_prediction_solo = getLSTMResult([stdData[index]])
 y_prediction_solo = np.array(y_prediction_solo)
 y_prediction_solo = y_prediction_solo.reshape(47)
 k = index
-data = formatted_dataset[i]
+data = formatted_dataset[k]
 repres = y_prediction_solo
 m = repres * np.sqrt(np.var(originStdData[k])) + np.mean(originStdData[k])
 y_prediction_solo = m * np.sqrt(np.var(formatted_dataset[k])) + np.mean(formatted_dataset[k])
@@ -594,7 +616,7 @@ writeCache[1:] = predictAns
 WriteTotalTrafficToFile(writeCache)
 writeCache = np.zeros(48)
 writeCache[0] = formatted_dataset[index,432,0]
-writeCache[1:] = y_prediction
+writeCache[1:] = y_prediction_solo
 WriteSpecTrafficToFile(writeCache)
 WriteTestTrafficToFile(formatted_dataset[index,432:].ravel())
 
@@ -612,3 +634,4 @@ plt.plot(y_prediction_solo,color='green',label="单独预测")
 plt.plot(predictAns,color='blue',label="集成预测")
 plt.legend(loc='upper right')
 plt.savefig('data'+str(index)+'.png')
+print(foreignTime-time.time(),'s')

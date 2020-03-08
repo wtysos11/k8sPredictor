@@ -16,13 +16,14 @@ from statsmodels.tsa.arima_model import _arma_predict_out_of_sample
 import time
 import numpy as np
 import time
+import math
 ##评价系统
 #根据真实值评价预测器的预测效果，使用MSE
 # data为测试集
 def evaluatePrediction(data,pred):
     score = 0
     for i in range(len(data)):
-        score+= mean_squared_error(data[i,-47:,0],pred[i])
+        score+= math.sqrt(mean_squared_error(data[i,-47:,0],pred[i]))
     score/=len(data)
     return score
 
@@ -215,12 +216,12 @@ from keras.layers import Input, Embedding, LSTM, Dense
 from keras.models import Model
 from keras import optimizers
 # 给出训练数据，返回训练好的模型
-def getLSTMModel(main_data,aux_data,y_train,epch):
-    main_input = Input(shape=(1,24), dtype='float32', name='main_input')# 输入的连续时间戳长度为24
+def getLSTMModel(main_data,aux_data,y_train,epch,window_size):
+    main_input = Input(shape=(1,window_size), dtype='float32', name='main_input')# 输入的连续时间戳长度为24
     #x = Embedding(output_dim=512, input_dim=10000, input_length=100)(main_input)
-    lstm_out = LSTM(24,dropout = 0.5,return_sequences = True)(main_input)
-    lstm_out = LSTM(24)(lstm_out)
-    auxiliary_input = Input(shape=(26,),name='aux_input')
+    lstm_out = LSTM(10,dropout = 0.5,return_sequences = True)(main_input)
+    lstm_out = LSTM(10)(lstm_out)
+    auxiliary_input = Input(shape=(24+window_size+1,),name='aux_input')
     x = keras.layers.concatenate([lstm_out, auxiliary_input])
     x = Dense(64, activation='relu')(x)
     x = Dense(32, activation='relu')(x)
@@ -234,9 +235,11 @@ def getLSTMModel(main_data,aux_data,y_train,epch):
 # 问题：预测的结果无法小于0
 # 猜测是辅助函数这边的问题
 # 构造一个普通的LSTM
-def getLSTMResult(data,epch):
+def getLSTMResult(data,window_size):
     #第一步，切分数据集
+    #超参数
     ratio = 0.9
+    epch = 14 #训练次数为14
     #然后对于每个24小时进行训练。用前24小时去精确预测后24小时中的某一个点。
     # 对训练数据的24小时内生成训练窗口集合。
     # 内部时间戳，24个连续的时间戳
@@ -251,22 +254,22 @@ def getLSTMResult(data,epch):
         # 对于每一个点，将其前面的24个点打包成连续时间戳
         # 提取前24个点的均值和方差，以及23个一阶差分数据
         # 以及这个点是该天的第几个小时
-        window_size = 24
         tsData = data[index]
         for i in range(window_size,int(len(tsData)*ratio)): #需要预测的时间点
             main_input_list.append(tsData[i-window_size:i]) #放入连续的24个时间戳
-            aux = np.zeros(26)
-            aux[0] = i%24
-            aux[1] = np.mean(tsData[i-window_size:i])
-            aux[2] = np.var(tsData[i-window_size:i])
-            aux[3:] = np.diff(tsData[i-window_size:i].ravel())
+            aux = np.zeros(24+window_size+1)
+            #使用one hot encoding
+            aux[i%24] = 1
+            aux[24] = np.mean(tsData[i-window_size:i])
+            aux[25] = np.var(tsData[i-window_size:i])
+            aux[26:] = np.diff(tsData[i-window_size:i].ravel())
             auxiliary_input_list.append(aux)
             y_train.append(tsData[i])
         main_input_list = np.array(main_input_list)
         main_input_list = main_input_list.reshape(main_input_list.shape[0],1,main_input_list.shape[1]) #变成数量*维数*样本数的形式
         auxiliary_input_list = np.array(auxiliary_input_list)
         y_train = np.array(y_train)
-        model = getLSTMModel(main_input_list,auxiliary_input_list,y_train,epch)
+        model = getLSTMModel(main_input_list,auxiliary_input_list,y_train,epch,window_size)
 
         #生成测试数据  
         #对未来的47个点，生成对应的预测值
@@ -274,11 +277,11 @@ def getLSTMResult(data,epch):
         aux_input = []
         for i in range(int(len(tsData)*ratio)+1,len(tsData)):
             test_input.append(tsData[i-window_size:i]) #放入连续的24个时间戳
-            aux = np.zeros(26)
-            aux[0] = i%24
-            aux[1] = np.mean(tsData[i-window_size:i])
-            aux[2] = np.var(tsData[i-window_size:i])
-            aux[3:] = np.diff(tsData[i-window_size:i].ravel())
+            aux = np.zeros(24+window_size+1)
+            aux[i%24] = 1
+            aux[24] = np.mean(tsData[i-window_size:i])
+            aux[25] = np.var(tsData[i-window_size:i])
+            aux[26:] = np.diff(tsData[i-window_size:i].ravel())
             aux_input.append(aux)
 
         test_input = np.array(test_input)
@@ -291,19 +294,24 @@ def getLSTMResult(data,epch):
     print('lstm predict time:',e-s,'s')
     return store
 
+# 想法一：极简单的LSTM，小窗口（3-8），多层（三层）,stateful，详见：https://www.kaggle.com/kleberbernardo/web-traffic-temporal-series-with-lstm
+# 验证过后效果并不好。但是小窗口本身是有效果的。窗口大小为8时要显著的小于窗口大小为24时的情况。
 
+# 想法二：GRU seq2seq进行预测
+# 参考：https://github.com/LukeTonin/keras-seq-2-seq-signal-prediction
+# https://www.kaggle.com/c/web-traffic-time-series-forecasting/discussion/43795
 
 if __name__=="__main__":
     cache = DataOperator()
-    epch = [14,24]
+    window_size = [4,8,10,24]
     l = []
     # 问题：LSTM可能与投入的数据量有关系
-    for e in epch:
-        data = cache.stdData[:1000]
+    for e in window_size:
+        data = cache.stdData[8000:9000]
         ans = getLSTMResult(data,e)
         l.append(evaluatePrediction(data,ans))
     for i in range(len(l)):
-        print(i,epch[i],l[i])
+        print(i,window_size[i],l[i])
     # 检测ARMA
     #ans = getARMAresult(cache)
     #print(evaluatePrediction(cache.stdData,ans))
